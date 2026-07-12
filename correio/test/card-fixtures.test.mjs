@@ -8,9 +8,10 @@ import { fileURLToPath } from "node:url";
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = path.join(ROOT, "bin", "gmail.js");
+const LAST_SEARCH = path.join(ROOT, "state", "last-search.json");
 
 const CASES = [
-  ["card-list", ["card-list", "--fixture", "fixtures/input/card-list.json", "--query", "in:inbox"], "fixtures/expected/card-list.json"],
+  ["card-list", ["card-list", "--fixture", "fixtures/input/card-list.json", "--query", "de Joanna · comprovantes"], "fixtures/expected/card-list.json"],
   ["O1-title-bold", ["card", "--fixture", "fixtures/input/original-title-bold.json"], "fixtures/expected/O1-title-bold.json"],
   ["O2-metadata-sender", ["card", "--fixture", "fixtures/input/original-metadata-sender.json"], "fixtures/expected/O2-metadata-sender.json"],
   ["O4-three-line-snippet", ["card", "--fixture", "fixtures/input/original-three-line-snippet.json"], "fixtures/expected/O4-three-line-snippet.json"],
@@ -41,70 +42,78 @@ export async function runFixtureTests({ quiet = true } = {}) {
 }
 
 export async function runModeTests({ quiet = true } = {}) {
-  const raw = await render(["card", "--fixture", "fixtures/input/a2-html-sanitized.json", "--raw"]);
-  assert.equal(raw, [
-    "=== RAW CARD ===",
-    "thread_id: thr-a2",
-    "message_id: a2-html",
-    "body_state: ok",
-    "subject: HTML <perigoso>",
-    "sender: HTML Bot",
-    "first_name: HTML",
-    "date: 12/07/2026, 09:00",
-    "thread_messages: 1",
-    "attachments: ",
-    "body:",
-    "Texto & seguro\nLink externo (https://example.test)",
-    "=== END RAW CARD ===",
-    ""
-  ].join("\n"), "raw mode output differs");
+  let previousState = null;
+  try {
+    previousState = await fs.readFile(LAST_SEARCH, "utf8");
+  } catch {}
 
-  const summary = await render(["card", "--fixture", "fixtures/input/a2-html-sanitized.json", "--summary", "Resumo *final* [telegram]"]);
-  assert.equal(summary, [
-    "=== CARD ===",
-    "*HTML <perigoso>*",
-    "De: HTML Bot · 12/07/2026, 09:00",
-    "Resumo \\*final\\* \\[telegram]",
-    "=== END CARD ===",
-    ""
-  ].join("\n"), "summary mode output differs");
+  try {
+    const raw = await render(["card", "--fixture", "fixtures/input/a2-html-sanitized.json", "--raw"]);
+    assert.equal(raw, [
+      "=== RAW CARD ===",
+      "thread_id: thr-a2",
+      "message_id: a2-html",
+      "body_state: ok",
+      "subject: HTML <perigoso>",
+      "sender: HTML Bot",
+      "first_name: HTML",
+      "date: 12/07/2026, 09:00",
+      "thread_messages: 1",
+      "attachments: ",
+      "body:",
+      "Texto & seguro\nLink externo (https://example.test)",
+      "=== END RAW CARD ===",
+      ""
+    ].join("\n"), "raw mode output differs");
 
-  const omitBody = await render(["card", "--fixture", "fixtures/input/a2-html-sanitized.json", "--omit-body"]);
-  assert.equal(omitBody, [
-    "=== CARD ===",
-    "*HTML <perigoso>*",
-    "De: HTML Bot · 12/07/2026, 09:00",
-    "(corpo omitido)",
-    "=== END CARD ===",
-    ""
-  ].join("\n"), "omit-body mode output differs");
+    const summary = await render(["card", "--fixture", "fixtures/input/a2-html-sanitized.json", "--summary", "Resumo *final* [telegram]"]);
+    assert.equal(summary, [
+      "*HTML <perigoso>*",
+      "12/07/2026, 09:00 - HTML Bot",
+      "html@example.test",
+      "Resumo \\*final\\* \\[telegram]",
+      ""
+    ].join("\n"), "summary mode output differs");
 
-  const selectState = await render(["card-list", "--fixture", "fixtures/input/card-list.json", "--query", "in:inbox"]);
-  assert.ok(selectState.includes("card-list para: in:inbox"));
-  const selected = await render(["card", "--select", "1"]);
-  assert.equal(selected, [
-    "=== CARD ===",
-    "*Duplicado que nao deve aparecer*",
-    "De: Edoardo Oliveira · 12/07/2026, 11:31",
-    "Duplicado por message-id.",
-    "=== END CARD ===",
-    ""
-  ].join("\n"), "selection mode output differs");
+    const omitBody = await render(["card", "--fixture", "fixtures/input/a2-html-sanitized.json", "--omit-body"]);
+    assert.equal(omitBody, [
+      "*HTML <perigoso>*",
+      "12/07/2026, 09:00 - HTML Bot",
+      "html@example.test",
+      "(corpo omitido)",
+      ""
+    ].join("\n"), "omit-body mode output differs");
 
-  const limited = await render(["card-list", "--fixture", "fixtures/input/card-list.json", "--query", "in:inbox", "--max-results", "2"]);
-  assert.equal(limited, [
-    "card-list para: in:inbox",
-    "Página 1",
-    "1. *Duplicado que nao deve aparecer*",
-    "   De: Edoardo · 12/07 11:31",
-    "2. *HTML puro com <b>tags</b> e link remoto*",
-    "   De: Equipe · 12/07 12:05",
-    ""
-  ].join("\n"), "max-results output differs");
-  const limitedState = JSON.parse(await fs.readFile(path.join(ROOT, "state", "last-search.json"), "utf8"));
-  assert.equal(limitedState.entries.length, 2, "max-results should limit persisted selection state");
+    const selectState = await render(["card-list", "--fixture", "fixtures/input/card-list.json", "--query", "de Joanna · comprovantes"]);
+    assert.ok(selectState.includes("Busca: de Joanna · comprovantes"));
+    const selected = await render(["card", "--select", "1"]);
+    assert.equal(selected, [
+      "*Re: Obra Reforma Quarto Liz Monjope - Comprovantes PHC Interiores enviados para conferência*",
+      "10/07/2026, 11:35 - JoannaFraga",
+      "joannafragabrown@gmail.com",
+      "Segue comprovante PHC Interiores.",
+      "Pagamento anexado para conferência.",
+      "Aguardo confirmação.",
+      ""
+    ].join("\n"), "selection mode output differs");
 
-  if (!quiet) console.log("ok raw/summary/omit/select");
+    const limited = await render(["card-list", "--fixture", "fixtures/input/card-list.json", "--query", "de Joanna · comprovantes", "--max-results", "1"]);
+    assert.equal(limited, [
+      "Busca: de Joanna · comprovantes",
+      "1. Re: Obra Reforma Quarto Liz Monjope - Comprovantes PHC Inte… · 10/07 11:35 · JoannaFraga",
+      ""
+    ].join("\n"), "max-results output differs");
+    const limitedState = JSON.parse(await fs.readFile(LAST_SEARCH, "utf8"));
+    assert.equal(limitedState.entries.length, 1, "max-results should limit persisted selection state");
+    assert.ok(!limited.includes("Página 1"), "page=1 should not render a Página line");
+    assert.ok(!selected.includes("=== CARD ==="), "approved card format must not render card fences");
+    assert.ok(selected.split("\n")[2].includes("@"), "approved card format requires sender email on line 3");
+
+    if (!quiet) console.log("ok raw/summary/omit/select/approved-format");
+  } finally {
+    if (previousState === null) await fs.rm(LAST_SEARCH, { force: true });
+    else await fs.writeFile(LAST_SEARCH, previousState, "utf8");
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -34,6 +34,13 @@ function truncateWordBoundary(value, maxChars) {
   return `${cut}…`;
 }
 
+function truncateFixed(value, maxChars) {
+  const text = collapseWhitespace(value);
+  const limit = Math.max(1, Number(maxChars) || 1);
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(1, limit - 1)).trimEnd()}…`;
+}
+
 function decodeHtmlEntities(value) {
   const text = String(value ?? "");
   return text.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (_, entity) => {
@@ -105,6 +112,11 @@ function localPartFromFromHeader(fromHeader) {
   const email = text.match(/([^\s<>]+@[^<>]+)/)?.[1];
   if (!email) return "";
   return email.split("@")[0] || "";
+}
+
+function emailFromFromHeader(fromHeader) {
+  const text = collapseWhitespace(fromHeader);
+  return text.match(/([^\s<>]+@[^<>\s]+)/)?.[1] || "";
 }
 
 function firstNameFromFromHeader(fromHeader) {
@@ -240,6 +252,7 @@ function messageToCardEntry(message, { threadMessageCount = 1 } = {}) {
     from,
     senderLabel: senderLabelFromFromHeader(from),
     firstName: firstNameFromFromHeader(from),
+    senderEmail: emailFromFromHeader(from),
     dateRaw,
     dateList: formatListDate(dateRaw),
     dateCard: formatCardDate(dateRaw),
@@ -273,6 +286,7 @@ function threadToCardEntry(thread) {
     subject: "(sem assunto)",
     from: "",
     senderLabel: "(desconhecido)",
+    senderEmail: "",
     firstName: "(desconhecido)",
     dateRaw: "",
     dateList: "(data desconhecida)",
@@ -319,13 +333,14 @@ function renderCardList({ query, page = 1, entries = [] }) {
   const humanQuery = escapeTelegramDynamic(collapseWhitespace(query));
   const deduped = normalizeEntriesByThreadId(entries);
   if (!deduped.length) return `Nada encontrado para: ${humanQuery}`;
-  const lines = [`card-list para: ${humanQuery}`, `Página ${Number(page) || 1}`];
+  const pageNumber = Number(page) || 1;
+  const lines = [`Busca: ${humanQuery}`];
+  if (pageNumber !== 1) lines.push(`Página ${pageNumber}`);
   for (const [index, entry] of deduped.entries()) {
-    const title = escapeTelegramDynamic(truncateWordBoundary(entry.subject || "(sem assunto)", 60));
+    const title = escapeTelegramDynamic(truncateFixed(entry.subject || "(sem assunto)", 60));
     const sender = escapeTelegramDynamic(entry.firstName || "(desconhecido)");
     const date = escapeTelegramDynamic(entry.dateList || "(data desconhecida)");
-    lines.push(`${index + 1}. *${title}*`);
-    lines.push(`   De: ${sender} · ${date}`);
+    lines.push(`${index + 1}. ${title} · ${date} · ${sender}`);
   }
   return lines.join("\n");
 }
@@ -348,11 +363,8 @@ function bodyLinesFromText(value, maxLines = 3) {
 function renderCard(entry, { summaryText = null, omitBody = false, raw = false } = {}) {
   const subject = escapeTelegramDynamic(truncateWordBoundary(entry.subject || "(sem assunto)", 200));
   const sender = escapeTelegramDynamic(entry.senderLabel || "(desconhecido)");
+  const email = escapeTelegramDynamic(entry.senderEmail || emailFromFromHeader(entry.from) || "(e-mail desconhecido)");
   const date = escapeTelegramDynamic(entry.dateCard || "(data desconhecida)");
-  const threadNote = entry.threadMessageCount > 1 ? escapeTelegramDynamic(`(thread com ${entry.threadMessageCount} mensagens)`) : null;
-  const attachments = Array.isArray(entry.attachments) && entry.attachments.length
-    ? escapeTelegramDynamic(`Anexos (${entry.attachments.length}): ${entry.attachments.join(", ")}`)
-    : null;
   const bodySource = raw ? entry.bodyText : (summaryText != null ? summaryText : entry.bodyText);
   const bodyState = entry.bodyState || "empty";
   const bodyLines = omitBody
@@ -380,14 +392,11 @@ function renderCard(entry, { summaryText = null, omitBody = false, raw = false }
   }
 
   const lines = [
-    "=== CARD ===",
     `*${subject}*`,
-    `De: ${sender} · ${date}`,
+    `${date} - ${sender}`,
+    email,
     ...resolvedBody
   ];
-  if (threadNote) lines.push(threadNote);
-  if (attachments) lines.push(attachments);
-  lines.push("=== END CARD ===");
   return lines.join("\n");
 }
 
@@ -396,6 +405,7 @@ export {
   collapseWhitespace,
   decodeHtmlEntities,
   displayNameFromFromHeader,
+  emailFromFromHeader,
   escapeTelegramDynamic,
   extractReadableBody,
   formatCardDate,
@@ -409,6 +419,7 @@ export {
   renderCard,
   renderCardList,
   senderLabelFromFromHeader,
+  truncateFixed,
   threadToCardEntry,
   truncateWordBoundary
 };

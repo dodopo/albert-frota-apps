@@ -11,6 +11,11 @@
     "expiresInSeconds": 900,
     "namespace": "gmail"
   },
+  "gmail": {
+    "query": "de Joanna · comprovantes",
+    "sourceModule": "",
+    "note": "Em producao, aponte sourceModule ou CORREIO_GMAIL_SOURCE para o modulo Gmail local. Fixtures usam --fixture."
+  },
   "actions": {
     "view": {
       "mode": "telegram_sanitized_paginated",
@@ -29,7 +34,7 @@
       "permanent": false
     }
   },
-  "fixturesOnly": true,
+  "fixturesOnly": false,
   "secrets": {
     "note": "Nao coloque tokens, client secrets ou credenciais neste arquivo."
   }

@@ -8,7 +8,8 @@ Entrada local para renderizar cards de e-mail em texto puro, pronta para colar n
 - Fixture e contrato primeiro: toda saida relevante precisa de fixture esperada byte a byte.
 - Operacao local e explicita: os comandos rodam via Node, sem daemon, sem cron e sem envio externo.
 - `card-list` e `card` sao texto puro. Nao ha JSON na stdout operacional.
-- `card-list` lista uma linha por thread, deduplica por `threadId` e grava `state/last-search.json`.
+- `card-list --query` executa a fonte Gmail configurada; `--fixture` fica restrito a teste.
+- `card-list` lista uma linha por thread, deduplica por `threadId` e grava `state/last-search.json` fora do git.
 - `card --select N` usa a ultima busca local. `card --id <id>` seleciona direto pelo fixture.
 - `card --raw` mostra corpo bruto para agente. `card --summary "<t>"` renderiza a versao final. `card --omit-body` mostra o aviso.
 - Mudanca de contrato exige fixture nova e README atualizado.
@@ -37,16 +38,22 @@ node bin/gmail.js self-test
 
 ## Operacao
 
-Listar cards:
+Listar cards pela fonte Gmail configurada:
 
 ```sh
-node bin/gmail.js card-list --fixture fixtures/input/card-list.json --query "in:inbox"
+node bin/gmail.js card-list --query "de Joanna · comprovantes"
+```
+
+Fixture byte a byte do gabarito oficial F1:
+
+```sh
+node bin/gmail.js card-list --fixture fixtures/input/card-list.json --query "de Joanna · comprovantes"
 ```
 
 Limitar a lista apos deduplicar por thread:
 
 ```sh
-node bin/gmail.js card-list --fixture fixtures/input/card-list.json --query "in:inbox" --max-results 2
+node bin/gmail.js card-list --fixture fixtures/input/card-list.json --query "de Joanna · comprovantes" --max-results 1
 ```
 
 Abrir um card diretamente:
@@ -85,8 +92,8 @@ node bin/gmail.js self-test
 - `card-list --query <q> [--max-results 3] [--page N]` imprime um eco humanizado, lista numerada, hora em `America/Sao_Paulo`, primeiro nome do remetente e nada de snippet cru.
 - Quando nada aparece, a saida e `Nada encontrado para: <eco>`.
 - `card --select N | --id <id>` aceita `--raw`, `--summary "<t>"` e `--omit-body`.
-- Sem flag, o card sai com moldura, titulo em negrito e tres linhas do corpo limpo.
-- Thread longa mostra a mensagem mais recente e anexa `"(thread com N mensagens)"`.
+- Sem flag, o card sai no formato aprovado: titulo em negrito, data/remetente, e-mail completo na linha 3 e ate tres linhas do corpo limpo.
+- A lista aprovada usa `Busca: <q>`, uma linha por item e nao mostra `Página 1`.
 
 ## Adendo A1-A10
 
@@ -94,9 +101,9 @@ node bin/gmail.js self-test
 - A2: `body_state` e tratado como `ok`, `empty` ou `unreadable`; o aviso `"(sem corpo legível)"` aparece quando nao ha corpo aproveitavel.
 - A3: remetente segue a precedencia display-name -> parte local -> `"(desconhecido)"`; o primeiro nome vem do primeiro token do display-name.
 - A4: caracteres que quebram formatacao de Telegram sao escapados no conteudo dinamico; o negrito do titulo continua vindo do codigo.
-- A5: titulo corta em fronteira de palavra com elipse; lista usa 60 chars e card usa 200.
+- A5: titulo da lista corta de forma deterministica com elipse para bater o gabarito oficial; card usa 200 chars em fronteira de palavra.
 - A6: datas exibidas em `America/Sao_Paulo`, com fallback UTC-3 se necessario e `"(data desconhecida)"` quando invalida.
-- A7: links ficam como texto puro; anexos aparecem apenas na linha `Anexos (N): nome1, nome2`.
+- A7: links ficam como texto puro; anexos nao entram no card final aprovado.
 - A8: `card-list` deduplica por `threadId` e `state/last-search.json` guarda o indice -> `messageId`.
 - A9: NFC normaliza Unicode e remove controles, zero-width e RTL-override.
 - A10: `--raw` e para agente, `--summary` e `--omit-body` nao expõem o corpo bruto no card final.
@@ -145,11 +152,13 @@ O teste `test/card-fixtures.test.mjs` compara stdout byte a byte e tambem cobre 
 
 ## Proveniencia
 
-Missao de implementacao no staging:
+Missoes de implementacao no staging:
 
 ```text
 runId: 7b1e2e50-0b02-4d45-beb0-92e9de7d200b
 childSessionKey: agent:neo:subagent:85950413-1b82-4a02-9194-a9b75a38ae40
+runId: 08d3c391-eb4a-4a15-a6d3-6322f06551ea
+childSessionKey: agent:neo:subagent:faa00a01-aad5-4ecb-a004-c5c92fe79d36
 ```
 
-Validacao byte a byte executada com sucesso em `npm test`.
+Validacao byte a byte executada com sucesso em `npm test` e `node bin/gmail.js self-test`.

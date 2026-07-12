@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   collapseWhitespace,
   escapeTelegramDynamic,
+  emailFromFromHeader,
   firstNameFromFromHeader,
   formatCardDate,
   formatListDate,
@@ -15,7 +16,7 @@ import {
   senderLabelFromFromHeader,
   threadToCardEntry,
   truncateWordBoundary
-} from "../../lib/card-format.js";
+} from "../lib/card-format.js";
 
 const BIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(BIN_DIR, "..");
@@ -27,12 +28,12 @@ function usage() {
     "usage: gmail.js <card|card-list|self-test> [options]",
     "",
     "commands:",
-    "  card       render one Telegram-ready card from a fixture or last search",
-    "  card-list  render a Telegram-ready list from a fixture",
+    "  card       render one Telegram-ready card from last search or a fixture",
+    "  card-list  run Gmail search and render a Telegram-ready list",
     "  self-test  compare generated output against fixtures/expected",
     "",
     "options:",
-    "  --fixture <path>  input JSON fixture",
+    "  --fixture <path>  input JSON fixture; tests only",
     "  --config <path>   config JSON; default correio/gmail-config-exemplo.json",
     "  --query <q>       search echo used by card-list",
     "  --max-results <n> limit card-list after thread dedupe",
@@ -98,8 +99,10 @@ function normalizeMessage(message) {
     threadId: String(message.threadId || ""),
     messageId: String(message.id || ""),
     subject: collapseWhitespace(message.subject || "(sem assunto)"),
+    from,
     senderLabel: senderLabelFromFromHeader(from),
     firstName: firstNameFromFromHeader(from),
+    senderEmail: emailFromFromHeader(from),
     dateRaw: date,
     dateList: formatListDate(date),
     dateCard: formatCardDate(date),
@@ -124,6 +127,35 @@ function queryEcho(input, fallbackConfig, rawQuery) {
   return collapseWhitespace(rawQuery || input?.query || input?.searchQuery || fallbackConfig?.gmail?.searchQuery || fallbackConfig?.gmail?.query || "");
 }
 
+function sourceModulePath(config) {
+  const configured = process.env.CORREIO_GMAIL_SOURCE || config?.gmail?.sourceModule || config?.sourceModule || "";
+  if (!configured) return "";
+  return path.isAbsolute(configured) ? configured : path.resolve(ROOT, configured);
+}
+
+async function loadGmailSource(config) {
+  const modulePath = sourceModulePath(config);
+  if (!modulePath) return null;
+  return import(pathToFileURL(modulePath).href);
+}
+
+async function searchGmail(config, { query, page, maxResults }) {
+  const source = await loadGmailSource(config);
+  if (!source) {
+    throw new Error("card-list requires a configured Gmail source module when --fixture is not used");
+  }
+  const search = source.searchGmail || source.searchThreads || source.listThreads || source.default;
+  if (typeof search !== "function") {
+    throw new Error("configured Gmail source module must export searchGmail, searchThreads, listThreads, or default");
+  }
+  const result = await search({ query, page, maxResults, config });
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result?.threads)) return result.threads;
+  if (Array.isArray(result?.messages)) return result.messages;
+  if (Array.isArray(result?.entries)) return result.entries;
+  throw new Error("configured Gmail source returned no threads, messages, or entries array");
+}
+
 async function saveLastSearch(payload) {
   await fs.mkdir(path.dirname(LAST_SEARCH), { recursive: true });
   const safe = {
@@ -133,8 +165,10 @@ async function saveLastSearch(payload) {
       threadId: entry.threadId,
       messageId: entry.messageId,
       subject: entry.subject,
+      from: entry.from,
       senderLabel: entry.senderLabel,
       firstName: entry.firstName,
+      senderEmail: entry.senderEmail,
       dateRaw: entry.dateRaw,
       dateList: entry.dateList,
       dateCard: entry.dateCard,
@@ -178,13 +212,14 @@ function resolveCardMode() {
 
 async function commandCardList() {
   const fixture = readArg("fixture");
-  if (!fixture) throw new Error("card-list requires --fixture");
   const config = await loadConfig();
-  const input = await readJson(fixture);
   const page = Number(readArg("page", "1")) || 1;
   const maxResults = Number(readArg("max-results", "0")) || 0;
+  const input = fixture ? await readJson(fixture) : null;
   const query = queryEcho(input, config, readArg("query", null));
-  const entries = dedupeByThread(normalizeInput(input)).slice(0, maxResults > 0 ? maxResults : undefined);
+  if (!query) throw new Error("card-list requires --query or a query in config");
+  const sourceItems = fixture ? normalizeInput(input) : normalizeInput({ threads: await searchGmail(config, { query, page, maxResults }) });
+  const entries = dedupeByThread(sourceItems).slice(0, maxResults > 0 ? maxResults : undefined);
   const output = entries.length
     ? renderCardList({ query, page, entries })
     : `Nada encontrado para: ${escapeTelegramDynamic(query)}`;
