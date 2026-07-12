@@ -1,0 +1,10 @@
+{
+  "message": {
+    "id": "o2-meta",
+    "threadId": "thr-o2",
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "Bruno Costa <bruno@example.test>",
+    "subject": "Metadados",
+    "textBody": "Corpo curto."
+  }
+}

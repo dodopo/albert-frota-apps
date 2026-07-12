@@ -1,0 +1,18 @@
+{
+  "message": {
+    "id": "a10-edge",
+    "threadId": "thr-a10",
+    "threadMessageCount": 99,
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "Edge <edge@example.test>",
+    "subject": "Titulo gigantesco com controles invisiveis \u202eabc que precisa ser limpo e truncado para nao quebrar o layout operacional",
+    "textBody": "",
+    "attachments": [
+      {
+        "name": "evidencia.txt",
+        "mime": "text/plain",
+        "bytes": 42
+      }
+    ]
+  }
+}

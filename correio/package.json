@@ -1,0 +1,16 @@
+{
+  "name": "correio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "gmail.js": "./bin/gmail.js"
+  },
+  "scripts": {
+    "test": "node test/card-fixtures.test.mjs",
+    "self-test": "node bin/gmail.js self-test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

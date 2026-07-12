@@ -1,0 +1,10 @@
+{
+  "message": {
+    "id": "a2-html",
+    "threadId": "thr-a2",
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "HTML Bot <html@example.test>",
+    "subject": "HTML <perigoso>",
+    "htmlBody": "<p>Texto &amp; seguro</p><script>roubar()</script><p>Link <a href=\"https://example.test\">externo</a></p>"
+  }
+}

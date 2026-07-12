@@ -1,0 +1,10 @@
+{
+  "message": {
+    "id": "a1-no-external",
+    "threadId": "thr-a1",
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "Duda <duda@example.test>",
+    "subject": "Tudo dentro do Telegram",
+    "textBody": "Nenhum botao usa URL externa."
+  }
+}

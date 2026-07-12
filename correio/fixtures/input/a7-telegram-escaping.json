@@ -1,0 +1,10 @@
+{
+  "message": {
+    "id": "a7-escape",
+    "threadId": "thr-a7",
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "Escape <escape@example.test>",
+    "subject": "Quebra <b>negrito</b> & injeta",
+    "textBody": "Usa <tag> & caracteres que quebrariam HTML."
+  }
+}

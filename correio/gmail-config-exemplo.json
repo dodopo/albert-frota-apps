@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "correio.gmail.config.v1",
+  "timezone": "America/Sao_Paulo",
+  "locale": "pt-BR",
+  "preview": {
+    "maxTitleChars": 72,
+    "maxSnippetChars": 180,
+    "maxSnippetLines": 3
+  },
+  "callbacks": {
+    "expiresInSeconds": 900,
+    "namespace": "gmail"
+  },
+  "actions": {
+    "view": {
+      "mode": "telegram_sanitized_paginated",
+      "externalClient": false,
+      "loadRemoteContent": false
+    },
+    "reply": {
+      "mode": "draft_then_review",
+      "sendDirectly": false
+    },
+    "search": {
+      "scope": "related_thread_sender"
+    },
+    "delete": {
+      "mode": "confirm_then_move_to_trash",
+      "permanent": false
+    }
+  },
+  "fixturesOnly": true,
+  "secrets": {
+    "note": "Nao coloque tokens, client secrets ou credenciais neste arquivo."
+  }
+}

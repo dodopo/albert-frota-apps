@@ -1,0 +1,10 @@
+{
+  "message": {
+    "id": "o4-snippet",
+    "threadId": "thr-o4",
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "Carla Lima <carla@example.test>",
+    "subject": "Preview ate tres linhas",
+    "textBody": "Linha 1\nLinha 2\nLinha 3\nLinha 4 nao entra"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "message": {
+    "id": "a8-sender",
+    "threadId": "thr-a8",
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "",
+    "subject": "Sem remetente",
+    "textBody": "Fallback deve ficar explicito."
+  }
+}

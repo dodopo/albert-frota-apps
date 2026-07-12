@@ -1,0 +1,10 @@
+{
+  "message": {
+    "id": "a9-time",
+    "threadId": "thr-a9",
+    "date": "2026-02-15T03:10:00.000Z",
+    "from": "Tempo <time@example.test>",
+    "subject": "Fuso local deterministico",
+    "textBody": "UTC fica preservado no campo de seguranca."
+  }
+}

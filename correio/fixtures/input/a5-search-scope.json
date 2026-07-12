@@ -1,0 +1,10 @@
+{
+  "message": {
+    "id": "a5-search",
+    "threadId": "thr-a5",
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "Busca <search@example.test>",
+    "subject": "Buscar tem escopo",
+    "textBody": "Busca relacionada a thread e remetente."
+  }
+}

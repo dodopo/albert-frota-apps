@@ -1,0 +1,50 @@
+{
+  "source": "fixture:contract-original+A1-A10",
+  "messages": [
+    {
+      "id": "msg-edoard-001",
+      "messageId": "<edoard-001@example.test>",
+      "threadId": "thr-edoard",
+      "threadMessageCount": 3,
+      "date": "2026-07-12T14:30:00.000Z",
+      "from": "Edoardo Oliveira <edoardooliveira@example.test>",
+      "subject": "Contrato do modulo de e-mail no Telegram aprovado para staging",
+      "textBody": "Segue o resumo do contrato aprovado.\nCada e-mail deve aparecer como card no Telegram.\nA operacao deve ficar dentro do Telegram.\nEsta quarta linha nao deve aparecer no preview."
+    },
+    {
+      "id": "msg-html-002",
+      "messageId": "<html-002@example.test>",
+      "threadId": "thr-html",
+      "date": "2026-07-12T15:05:00.000Z",
+      "from": "\"Equipe HTML\" <html.sender@example.test>",
+      "subject": "HTML puro com <b>tags</b> e link remoto",
+      "htmlBody": "<html><body><h1>Ola</h1><p>Conteudo <strong>HTML</strong> com &amp; entidades.</p><img src=\"https://tracker.example.test/pixel.png\"><script>alert('x')</script></body></html>",
+      "attachments": [
+        {
+          "name": "relatorio.pdf",
+          "mime": "application/pdf",
+          "bytes": 12345
+        }
+      ]
+    },
+    {
+      "id": "msg-empty-003",
+      "messageId": "<empty-003@example.test>",
+      "threadId": "thr-empty",
+      "date": "2026-02-15T03:10:00.000Z",
+      "from": "",
+      "subject": "Assunto extremamente longo para validar truncamento deterministico do card no Telegram sem quebrar o layout nem empurrar os botoes para fora da area segura",
+      "textBody": "",
+      "attachments": []
+    },
+    {
+      "id": "msg-edoard-duplicate",
+      "messageId": "<edoard-001@example.test>",
+      "threadId": "thr-edoard",
+      "date": "2026-07-12T14:31:00.000Z",
+      "from": "Edoardo Oliveira <edoardooliveira@example.test>",
+      "subject": "Duplicado que nao deve aparecer",
+      "textBody": "Duplicado por message-id."
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "message": {
+    "id": "a6-expired",
+    "threadId": "thr-a6",
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "Estado <state@example.test>",
+    "subject": "Callbacks expiram",
+    "textBody": "Botoes antigos nao executam acao.",
+    "state": "expired"
+  }
+}

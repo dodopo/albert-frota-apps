@@ -1,0 +1,10 @@
+{
+  "message": {
+    "id": "o1-title",
+    "threadId": "thr-o1",
+    "date": "2026-07-12T12:00:00.000Z",
+    "from": "Ana Silva <ana@example.test>",
+    "subject": "Titulo em negrito",
+    "textBody": "Primeira linha do corpo."
+  }
+}
