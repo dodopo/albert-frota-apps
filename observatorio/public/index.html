@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Snapshot da Frota</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar" aria-label="Resumo do snapshot">
+        <div>
+          <p class="eyebrow">snapshot local</p>
+          <h1>Frota Albert / OpenClaw</h1>
+        </div>
+        <button id="refresh" type="button">Atualizar</button>
+      </section>
+
+      <section class="source-strip" id="freshness" aria-label="Freshness por fonte"></section>
+
+      <section class="grid" id="agents" aria-label="Agentes"></section>
+
+      <section class="panel" aria-label="Proveniencia">
+        <div class="panel-title">
+          <h2>Feed de proveniencia</h2>
+          <span id="refresh-state"></span>
+        </div>
+        <div id="spawns" class="feed"></div>
+      </section>
+
+      <section class="panel" aria-label="Cofre">
+        <div class="panel-title">
+          <h2>Cofre</h2>
+        </div>
+        <div id="cofre" class="cofre"></div>
+      </section>
+
+      <section class="panel errors" aria-label="Erros parciais">
+        <div class="panel-title">
+          <h2>Erros parciais</h2>
+        </div>
+        <div id="errors"></div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
