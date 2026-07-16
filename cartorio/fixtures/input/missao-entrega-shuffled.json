@@ -1,0 +1,19 @@
+{
+  "payload": {
+    "observacao": "Café entregue"
+  },
+  "ator": "openclaw",
+  "missaoId": "F1-001",
+  "artefatos": [
+    {
+      "blobSha256": "2e7f3b6d6b9f0f2b5b8e8f9c7d6a5b4c3d2e1f00112233445566778899aabbcc",
+      "path": "./docs/out/../relatorio.txt"
+    }
+  ],
+  "ts": "2026-07-16T12:34:56.000Z",
+  "eventType": "missao.entregue",
+  "runId": "agent:neo:subagent:11111111-2222-3333-4444-555555555555",
+  "formatVersion": "cartorio.event-schema/v1",
+  "commit": "c596ae1b1577ef8454ee4d8aadb08d7fe3461a79",
+  "idempotencyKey": "f1-001:entregar:1"
+}

@@ -1,0 +1,11 @@
+{
+  "runId": "agent:neo:subagent:00000000-0000-4000-8000-000000000000",
+  "missaoId": "F1-passo3-café",
+  "artefatos": [
+    {
+      "blobSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "path": "./cartorio/fixtures/input/payload-valid.json"
+    }
+  ],
+  "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

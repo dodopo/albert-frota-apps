@@ -1,0 +1,18 @@
+{
+  "name": "@frota/cartorio",
+  "version": "0.2.0",
+  "description": "Esqueleto autocontido do F1 Cartorio: CLI missao, ledgerd e contratos locais.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "missao": "./bin/missao.js",
+    "ledgerd": "./bin/ledgerd.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "self-test": "node test/self-test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

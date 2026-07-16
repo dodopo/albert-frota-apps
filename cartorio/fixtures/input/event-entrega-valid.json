@@ -1,0 +1,21 @@
+{
+  "payload": {
+    "runId": "agent:neo:subagent:00000000-0000-4000-8000-000000000000",
+    "missaoId": "F1-passo3-café",
+    "artefatos": [
+      {
+        "blobSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "path": "./cartorio/fixtures/input/payload-valid.json"
+      }
+    ],
+    "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "ts": "2026-07-16T16:20:30.000Z",
+  "atorEfetivo": "openclaw",
+  "actorUid": 501,
+  "idempotencyKey": "missao:F1-passo3:entregar:fixture",
+  "eventType": "missao.entrega_registrada",
+  "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "seq": 7,
+  "formatVersion": "cartorio.ledger.event.v1"
+}
