@@ -18,13 +18,13 @@ test('missao exposes help and version', async () => {
 
 test('ledgerd exposes help, version, and smoke check', async () => {
   const help = await execFileAsync(process.execPath, ['bin/ledgerd.js', '--help']);
-  assert.match(help.stdout, /Stub do daemon escritor unico/);
+  assert.match(help.stdout, /Daemon escritor unico minimo/);
 
   const version = await execFileAsync(process.execPath, ['bin/ledgerd.js', '--version']);
   assert.match(version.stdout.trim(), /^\d+\.\d+\.\d+$/);
 
   const smoke = await execFileAsync(process.execPath, ['bin/ledgerd.js', '--self-check']);
-  assert.equal(smoke.stdout.trim(), 'ledgerd stub: ok');
+  assert.match(smoke.stdout.trim(), /^ledgerd self-check ok codeManifestHash=[0-9a-f]{64}$/);
 });
 
 test('protocol envelope and receipt skeleton keep required fields visible', () => {

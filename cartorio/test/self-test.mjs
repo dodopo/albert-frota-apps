@@ -19,7 +19,7 @@ const ledgerdVersion = await execFileAsync(process.execPath, ['bin/ledgerd.js', 
 assert.equal(ledgerdVersion.stdout.trim(), '0.2.0');
 
 const ledgerdSmoke = await execFileAsync(process.execPath, ['bin/ledgerd.js', '--self-check']);
-assert.equal(ledgerdSmoke.stdout.trim(), 'ledgerd stub: ok');
+assert.match(ledgerdSmoke.stdout.trim(), /^ledgerd self-check ok codeManifestHash=[0-9a-f]{64}$/);
 
 const envelope = makeEnvelope({
   command: 'entregar',
@@ -30,4 +30,4 @@ const envelope = makeEnvelope({
 });
 assert.equal(envelope.command, 'entregar');
 
-console.log('self-test ok: missao/ledgerd help/version and protocol envelope');
+console.log('self-test ok: missao/ledgerd help/version/self-check and protocol envelope');

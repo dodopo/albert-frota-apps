@@ -4,8 +4,8 @@ export const SUPPORTED_COMMANDS = ['abrir', 'entregar', 'coletar', 'status', 'au
 
 export const EVENT_TYPES = {
   MISSAO_ABERTA: 'missao.aberta',
-  ENTREGA_REGISTRADA: 'missao.entrega_registrada',
-  COLETA_REGISTRADA: 'missao.coleta_registrada',
+  ENTREGA_REGISTRADA: 'missao.entregue',
+  COLETA_REGISTRADA: 'missao.coletada',
   STATUS_CONSULTADO: 'missao.status_consultado',
   AUDIT_EXECUTADO: 'missao.audit_executado'
 };

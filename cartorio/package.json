@@ -9,6 +9,7 @@
     "ledgerd": "./bin/ledgerd.js"
   },
   "scripts": {
+    "build:native": "node bin/build-uid-peer.js",
     "test": "node --test",
     "self-test": "node test/self-test.mjs"
   },
