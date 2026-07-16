@@ -1,0 +1,419 @@
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { createHash, generateKeyPairSync } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+
+import { canonicalize, canonicalizeToBytes } from '../lib/canonical-json.js';
+import {
+  deriveKeyIdFromPublicKey,
+  rawPublicKeyFromPrivateKey,
+  signBytes
+} from '../lib/keyring.js';
+import { computeTreeHashExcludingReceipts, TREE_SCOPE_V1 } from '../lib/remote-verify.js';
+import { computeCodeManifestHash } from '../lib/uid-peer.js';
+
+const execFileAsync = promisify(execFile);
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const verifyBin = join(root, 'bin', 'verify-receipt.js');
+const ts = '2026-07-16T17:00:00.000Z';
+const runId = 'agent:neo:subagent:00000000-0000-4000-8000-000000000009';
+let receiptCounter = 0;
+
+async function tempRepo(name) {
+  const dir = await mkdtemp(join(tmpdir(), `cartorio-remote-${name}-`));
+  await git(dir, ['init', '-b', 'main']);
+  await git(dir, ['config', 'user.email', 'neo@example.invalid']);
+  await git(dir, ['config', 'user.name', 'Neo Test']);
+  await mkdir(join(dir, '.cartorio', 'keys'), { recursive: true });
+  await mkdir(join(dir, '.cartorio', 'missoes'), { recursive: true });
+  await mkdir(join(dir, '.cartorio', 'break-glass'), { recursive: true });
+  await mkdir(join(dir, 'build'), { recursive: true });
+  await writeFile(join(dir, 'package.json'), '{"name":"fixture"}\n');
+  await writeFile(join(dir, 'entrega.txt'), 'base\n');
+
+  const keys = makeKeys();
+  await writeJson(join(dir, '.cartorio', 'keys', 'keyring.json'), keys.keyring);
+  const manifest = makeManifest();
+  await writeJson(join(dir, 'build', 'uid-peer-helper.manifest.json'), manifest);
+  await commitAll(dir, 'base');
+  return {
+    dir,
+    keys,
+    manifest,
+    cleanup: () => rm(dir, { recursive: true, force: true })
+  };
+}
+
+test('passo9: receipt valido retorna receipt-valid', async () => {
+  const fx = await tempRepo('valid');
+  try {
+    await createReceiptCommit(fx, {});
+    const result = await runVerify(fx.dir);
+    assert.equal(result.status, 0);
+    assert.equal(result.json.state, 'receipt-valid');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: receipt ausente retorna fail', async () => {
+  const fx = await tempRepo('absent');
+  try {
+    await writeFile(join(fx.dir, 'entrega.txt'), 'sem receipt\n');
+    await commitAll(fx.dir, 'content without receipt');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: assinatura forjada retorna fail', async () => {
+  const fx = await tempRepo('forged');
+  try {
+    await createReceiptCommit(fx, {
+      mutateReceipt: (receipt) => ({ ...receipt, signature: Buffer.alloc(64).toString('base64') })
+    });
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: parentCommit divergente retorna fail', async () => {
+  const fx = await tempRepo('parent');
+  try {
+    const base = await head(fx.dir);
+    await createReceiptCommit(fx, { receiptOverrides: { parentCommit: base } });
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: conteudo efetivo alterado e digest divergente retorna fail', async () => {
+  const fx = await tempRepo('tree');
+  try {
+    await writeFile(join(fx.dir, 'entrega.txt'), 'conteudo assinado\n');
+    await commitAll(fx.dir, 'signed content');
+    const parentCommit = await head(fx.dir);
+    const signedTree = await computeTreeHashExcludingReceipts({ repo: fx.dir, commit: parentCommit, appDir: '' });
+    await writeFile(join(fx.dir, 'entrega.txt'), 'conteudo diferente\n');
+    const artifact = await artifactAtWorktree(fx.dir, 'entrega.txt');
+    const receipt = signReceipt(fx, {
+      parentCommit,
+      treeHashExcludingReceipts: signedTree.treeHashExcludingReceipts,
+      artefatos: [artifact]
+    });
+    await writeJson(join(fx.dir, '.cartorio', 'missoes', 'm-tree.receipt.json'), receipt);
+    await commitAll(fx.dir, 'receipt with stale tree digest');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: blob divergente retorna fail', async () => {
+  const fx = await tempRepo('blob');
+  try {
+    await createReceiptCommit(fx, { artifactOverrides: { blobSha256: '0'.repeat(64) } });
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: codeManifestHash divergente retorna fail', async () => {
+  const fx = await tempRepo('manifest');
+  try {
+    await createReceiptCommit(fx, { receiptOverrides: { codeManifestHash: '0'.repeat(64) } });
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: receipt replicado em commit com outro pai retorna fail', async () => {
+  const fx = await tempRepo('replay');
+  try {
+    const { receiptText } = await createReceiptCommit(fx, {});
+    await git(fx.dir, ['checkout', '--detach', 'HEAD~2']);
+    await writeFile(join(fx.dir, 'entrega.txt'), 'replay same content\n');
+    await mkdir(join(fx.dir, '.cartorio', 'missoes'), { recursive: true });
+    await writeFile(join(fx.dir, '.cartorio', 'missoes', 'm-remote.receipt.json'), receiptText);
+    await commitAll(fx.dir, 'replayed receipt');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: break-glass valido posterior retorna break-glass-valid com marca explicita', async () => {
+  const fx = await tempRepo('breakglass-valid');
+  try {
+    const target = await createTargetCommit(fx, 'target sem receipt');
+    await writeBreakGlass(fx, { id: 'bg-valid', targetCommit: target, expiry: '2099-01-01T00:00:00.000Z' });
+    await commitAll(fx.dir, 'break-glass posterior');
+    const result = await runVerify(fx.dir);
+    assert.equal(result.status, 0);
+    assert.equal(result.json.state, 'break-glass-valid');
+    assert.equal(result.json.exception, true);
+    assert.equal(result.json.targetCommit, target);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: break-glass com role errada retorna fail', async () => {
+  const fx = await tempRepo('breakglass-role');
+  try {
+    const target = await createTargetCommit(fx, 'target role errada');
+    await writeBreakGlass(fx, {
+      id: 'bg-role',
+      targetCommit: target,
+      expiry: '2099-01-01T00:00:00.000Z',
+      signer: fx.keys.ledger
+    });
+    await commitAll(fx.dir, 'break-glass wrong role');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: reuso de id break-glass em mais de um commit alvo retorna fail', async () => {
+  const fx = await tempRepo('breakglass-reuse');
+  try {
+    const targetOne = await createTargetCommit(fx, 'target one');
+    await writeBreakGlass(fx, { id: 'bg-reuse', targetCommit: targetOne, expiry: '2099-01-01T00:00:00.000Z' });
+    await commitAll(fx.dir, 'break-glass one');
+    const targetTwo = await createTargetCommit(fx, 'target two');
+    await writeBreakGlass(fx, { id: 'bg-reuse', targetCommit: targetTwo, expiry: '2099-01-01T00:00:00.000Z' });
+    await commitAll(fx.dir, 'break-glass reused');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: break-glass expirado retorna fail', async () => {
+  const fx = await tempRepo('breakglass-expired');
+  try {
+    const target = await createTargetCommit(fx, 'target expired');
+    await writeBreakGlass(fx, { id: 'bg-expired', targetCommit: target, expiry: '2000-01-01T00:00:00.000Z' });
+    await commitAll(fx.dir, 'break-glass expired');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo9: keyId ausente do keyring retorna fail', async () => {
+  const fx = await tempRepo('breakglass-key');
+  try {
+    const target = await createTargetCommit(fx, 'target unknown key');
+    const external = makeSingleKey('break-glass');
+    await writeBreakGlass(fx, {
+      id: 'bg-unknown-key',
+      targetCommit: target,
+      expiry: '2099-01-01T00:00:00.000Z',
+      signer: external
+    });
+    await commitAll(fx.dir, 'break-glass unknown key');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+async function createReceiptCommit(fx, { receiptOverrides = {}, artifactOverrides = {}, mutateReceipt = null } = {}) {
+  receiptCounter += 1;
+  await writeFile(join(fx.dir, 'entrega.txt'), `conteudo ${receiptCounter}\n`);
+  await commitAll(fx.dir, 'mission content');
+  const parentCommit = await head(fx.dir);
+  const tree = await computeTreeHashExcludingReceipts({ repo: fx.dir, commit: parentCommit, appDir: '' });
+  const artifact = { ...(await artifactAtCommit(fx.dir, parentCommit, 'entrega.txt')), ...artifactOverrides };
+  const receipt = signReceipt(fx, {
+    parentCommit,
+    treeHashExcludingReceipts: tree.treeHashExcludingReceipts,
+    artefatos: [artifact],
+    ...receiptOverrides
+  });
+  const finalReceipt = mutateReceipt ? mutateReceipt(receipt) : receipt;
+  const receiptPath = join(fx.dir, '.cartorio', 'missoes', `${receipt.missaoId}.receipt.json`);
+  await writeJson(receiptPath, finalReceipt);
+  await commitAll(fx.dir, 'mission receipt');
+  return { receiptPath, receipt: finalReceipt, receiptText: await readFile(receiptPath, 'utf8') };
+}
+
+async function createTargetCommit(fx, message) {
+  await writeFile(join(fx.dir, 'entrega.txt'), `${message}\n`);
+  await commitAll(fx.dir, message);
+  return head(fx.dir);
+}
+
+function signReceipt(fx, overrides = {}) {
+  const material = {
+    version: 'cartorio.receipt.v1',
+    missaoId: 'm-remote',
+    ledgerHeadHash: '1'.repeat(64),
+    ledgerSeq: 7,
+    parentCommit: overrides.parentCommit,
+    treeScope: TREE_SCOPE_V1,
+    treeHashExcludingReceipts: overrides.treeHashExcludingReceipts,
+    artefatos: overrides.artefatos,
+    runId,
+    ator: 'uid:501',
+    ts,
+    keyId: fx.keys.ledger.keyId,
+    codeManifestHash: fx.manifest.codeManifestHash,
+    buildId: fx.manifest.buildId,
+    ...overrides
+  };
+  const signature = signBytes(fx.keys.ledger.privateKey, canonicalizeToBytes(material)).toString('base64');
+  return { ...material, signature };
+}
+
+async function writeBreakGlass(fx, { id, targetCommit, expiry, signer = fx.keys.breakGlass }) {
+  const artifact = await artifactAtCommit(fx.dir, targetCommit, 'entrega.txt');
+  const material = {
+    id,
+    motivo: 'emergencia testavel',
+    commit: targetCommit,
+    artefatos: [artifact],
+    autorizadoPor: 'Dudous',
+    ts,
+    expiry,
+    incidentRef: `INC-${id}`,
+    keyId: signer.keyId
+  };
+  const signature = signBytes(signer.privateKey, canonicalizeToBytes(material)).toString('base64');
+  await writeJson(join(fx.dir, '.cartorio', 'break-glass', `${id}.json`), { ...material, signature });
+}
+
+function makeKeys() {
+  const ledger = makeSingleKey('ledgerd');
+  const breakGlass = makeSingleKey('break-glass');
+  return {
+    ledger,
+    breakGlass,
+    keyring: {
+      [ledger.keyId]: ledger.entry,
+      [breakGlass.keyId]: breakGlass.entry
+    }
+  };
+}
+
+function makeSingleKey(role) {
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const pubRaw = rawPublicKeyFromPrivateKey(privateKey);
+  const keyId = deriveKeyIdFromPublicKey(pubRaw);
+  return {
+    privateKey,
+    keyId,
+    entry: {
+      alg: 'ed25519',
+      pub: pubRaw.toString('base64'),
+      role,
+      status: 'active',
+      notBefore: '2026-01-01T00:00:00.000Z',
+      notAfter: '2100-01-01T00:00:00.000Z',
+      revokedAt: null
+    }
+  };
+}
+
+function makeManifest() {
+  const manifest = {
+    schema: 'cartorio.uid-peer-helper.manifest/v1',
+    buildId: 'uid-peer-helper:test',
+    binaryPath: 'build/uid-peer-helper',
+    binarySha256: '2'.repeat(64),
+    sourcePath: 'native/uid-peer-helper.c',
+    sourceSha256: '3'.repeat(64),
+    primitive: 'getpeereid(3)',
+    buildCommand: ['cc', '-o', 'build/uid-peer-helper', 'native/uid-peer-helper.c'],
+    signature: null
+  };
+  manifest.codeManifestHash = computeCodeManifestHash(manifest);
+  return manifest;
+}
+
+async function runVerify(repo) {
+  const result = await execFileAsync(process.execPath, [verifyBin, '--repo', repo], {
+    cwd: root
+  }).then(
+    (ok) => ({ status: 0, stdout: ok.stdout, stderr: ok.stderr }),
+    (error) => ({ status: error.code ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' })
+  );
+  const text = result.status === 0 ? result.stdout : result.stderr;
+  return { ...result, json: JSON.parse(text) };
+}
+
+async function artifactAtCommit(repo, commit, path) {
+  const { stdout } = await git(repo, ['cat-file', 'blob', `${commit}:${path}`], { encoding: 'buffer' });
+  return {
+    path,
+    blobSha256: sha256Buffer(stdout)
+  };
+}
+
+async function artifactAtWorktree(repo, path) {
+  const blob = await readFile(join(repo, path));
+  return {
+    path,
+    blobSha256: sha256Buffer(blob)
+  };
+}
+
+function sha256Buffer(buffer) {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+async function writeJson(path, value) {
+  await writeFile(path, canonicalize(value), 'utf8');
+}
+
+async function commitAll(repo, message) {
+  await git(repo, ['add', '-A']);
+  await git(repo, ['commit', '-m', message]);
+}
+
+async function head(repo) {
+  const { stdout } = await git(repo, ['rev-parse', 'HEAD']);
+  return stdout.trim();
+}
+
+async function git(cwd, args, options = {}) {
+  return execFileAsync('git', args, {
+    cwd,
+    encoding: options.encoding ?? 'utf8',
+    maxBuffer: 1024 * 1024 * 64
+  });
+}

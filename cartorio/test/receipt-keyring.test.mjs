@@ -20,9 +20,11 @@ import { signReceipt, verifyReceipt } from '../lib/receipt.js';
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ts = '2026-07-16T16:30:00.000Z';
-const commit = 'a'.repeat(40);
+const parentCommit = 'a'.repeat(40);
 const artifact = { path: 'package.json', blobSha256: 'b'.repeat(64) };
 const runId = 'agent:neo:subagent:receipt-keyring-gate-000000000001';
+const treeScope = 'cartorio.git-tree.v1:app-files-excluding-mission-receipts';
+const treeHashExcludingReceipts = 'e'.repeat(64);
 
 async function tempCase(name) {
   const dir = await mkdtemp(join(tmpdir(), `cartorio-receipt-${name}-`));
@@ -45,7 +47,9 @@ function receiptBase(overrides = {}) {
     missaoId: 'm-receipt',
     ledgerHeadHash: 'c'.repeat(64),
     ledgerSeq: 3,
-    commit,
+    parentCommit,
+    treeScope,
+    treeHashExcludingReceipts,
     artefatos: [artifact],
     runId,
     ator: 'uid:501',
@@ -89,7 +93,7 @@ test('gate passo7: ledgerd emite receipt assinado verificavel pela pub do keyrin
       command: 'entregar',
       missaoId: 'm-ledgerd',
       idempotencyKey: 'deliver',
-      payload: { missaoId: 'm-ledgerd', commit, artefatos: [artifact] }
+      payload: { missaoId: 'm-ledgerd', parentCommit, treeScope, treeHashExcludingReceipts, artefatos: [artifact] }
     };
     const coletar = { ...base, command: 'coletar', missaoId: 'm-ledgerd', idempotencyKey: 'collect', payload: { missaoId: 'm-ledgerd' } };
     await execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', JSON.stringify(abrir), '--ledger', t.ledgerPath], { cwd: root, env });
@@ -106,7 +110,9 @@ test('gate passo7: ledgerd emite receipt assinado verificavel pela pub do keyrin
         ledgerSeq: receipt.ledgerSeq,
         ledgerHeadHash: receipt.ledgerHeadHash
       },
-      expectedCommit: commit,
+      expectedParentCommit: parentCommit,
+      expectedTreeScope: treeScope,
+      expectedTreeHashExcludingReceipts: treeHashExcludingReceipts,
       expectedArtifacts: [artifact]
     });
   } finally {
@@ -138,12 +144,12 @@ test('gate passo7: receipt stale sobre cabeca antiga falha', async () => {
   }
 });
 
-test('gate passo7: commit divergente falha', async () => {
+test('gate passo7: parentCommit divergente falha', async () => {
   const { t, signed } = await signedFixture('commit');
   try {
     await assert.rejects(
-      () => verifyReceipt(signed, { keyringPath: t.keyringPath, expectedCommit: '1'.repeat(40) }),
-      { code: 'RECEIPT_COMMIT_MISMATCH' }
+      () => verifyReceipt(signed, { keyringPath: t.keyringPath, expectedParentCommit: '1'.repeat(40) }),
+      { code: 'RECEIPT_PARENT_COMMIT_MISMATCH' }
     );
   } finally {
     await t.cleanup();
@@ -290,7 +296,9 @@ test('gate passo7: assinatura cobre JSON canonico do payload sem signature', asy
       ator: signed.ator,
       runId: signed.runId,
       artefatos: signed.artefatos,
-      commit: signed.commit,
+      parentCommit: signed.parentCommit,
+      treeScope: signed.treeScope,
+      treeHashExcludingReceipts: signed.treeHashExcludingReceipts,
       ledgerSeq: signed.ledgerSeq,
       ledgerHeadHash: signed.ledgerHeadHash,
       missaoId: signed.missaoId,

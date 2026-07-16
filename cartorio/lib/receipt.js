@@ -22,7 +22,9 @@ export function buildReceipt({
   missaoId,
   ledgerHeadHash,
   ledgerSeq,
-  commit,
+  parentCommit,
+  treeScope,
+  treeHashExcludingReceipts,
   artefatos = [],
   runId,
   ator,
@@ -36,7 +38,9 @@ export function buildReceipt({
     missaoId,
     ledgerHeadHash,
     ledgerSeq,
-    commit,
+    parentCommit,
+    treeScope,
+    treeHashExcludingReceipts,
     artefatos,
     runId,
     ator,
@@ -82,7 +86,9 @@ export async function verifyReceipt(receipt, {
   keyring,
   keyringPath = process.env.CARTORIO_KEYRING_PATH || defaultKeyringPath(),
   currentHead = null,
-  expectedCommit = null,
+  expectedParentCommit = null,
+  expectedTreeHashExcludingReceipts = null,
+  expectedTreeScope = null,
   expectedArtifacts = null
 } = {}) {
   const parsed = typeof receipt === 'string' ? parseCanonicalJson(receipt) : receipt;
@@ -120,10 +126,22 @@ export async function verifyReceipt(receipt, {
       });
     }
   }
-  if (expectedCommit != null && parsed.commit !== expectedCommit) {
-    throw receiptError('RECEIPT_COMMIT_MISMATCH', 'commit do receipt diverge do esperado', {
-      receiptCommit: parsed.commit,
-      expectedCommit
+  if (expectedParentCommit != null && parsed.parentCommit !== expectedParentCommit) {
+    throw receiptError('RECEIPT_PARENT_COMMIT_MISMATCH', 'parentCommit do receipt diverge do pai esperado', {
+      receiptParentCommit: parsed.parentCommit,
+      expectedParentCommit
+    });
+  }
+  if (expectedTreeScope != null && parsed.treeScope !== expectedTreeScope) {
+    throw receiptError('RECEIPT_TREE_SCOPE_MISMATCH', 'treeScope do receipt diverge do esperado', {
+      receiptTreeScope: parsed.treeScope,
+      expectedTreeScope
+    });
+  }
+  if (expectedTreeHashExcludingReceipts != null && parsed.treeHashExcludingReceipts !== expectedTreeHashExcludingReceipts) {
+    throw receiptError('RECEIPT_TREE_HASH_MISMATCH', 'treeHashExcludingReceipts diverge da arvore reconstruida', {
+      receiptTreeHashExcludingReceipts: parsed.treeHashExcludingReceipts,
+      expectedTreeHashExcludingReceipts
     });
   }
   if (expectedArtifacts != null) {
@@ -154,7 +172,12 @@ function validateReceiptPayload(receipt, { requireSignature = false } = {}) {
     throw receiptError('RECEIPT_INVALID', 'ledgerSeq invalido', { ledgerSeq: receipt.ledgerSeq });
   }
   assertHex(receipt.ledgerHeadHash, 'ledgerHeadHash', HEX_SHA256);
-  assertHex(receipt.commit, 'commit', HEX_COMMIT);
+  if ('commit' in receipt) {
+    throw receiptError('RECEIPT_INVALID', 'receipt v1 emendado nao pode conter commit autorreferente');
+  }
+  assertHex(receipt.parentCommit, 'parentCommit', HEX_COMMIT);
+  assertNonEmptyString(receipt.treeScope, 'treeScope');
+  assertHex(receipt.treeHashExcludingReceipts, 'treeHashExcludingReceipts', HEX_SHA256);
   if (!Array.isArray(receipt.artefatos)) {
     throw receiptError('RECEIPT_INVALID', 'artefatos precisa ser array');
   }

@@ -6,7 +6,8 @@
   "private": true,
   "bin": {
     "missao": "./bin/missao.js",
-    "ledgerd": "./bin/ledgerd.js"
+    "ledgerd": "./bin/ledgerd.js",
+    "verify-receipt": "./bin/verify-receipt.js"
   },
   "scripts": {
     "build:native": "node bin/build-uid-peer.js",

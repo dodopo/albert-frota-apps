@@ -358,7 +358,9 @@ async function auditReceipts(ctx) {
       await verifyReceipt(receipt, {
         keyringPath: ctx.config.keyringPath,
         currentHead: ctx.head,
-        expectedCommit: delivery?.payload?.commit ?? record.payload?.commit,
+        expectedParentCommit: delivery?.payload?.parentCommit ?? record.payload?.parentCommit,
+        expectedTreeScope: delivery?.payload?.treeScope ?? record.payload?.treeScope,
+        expectedTreeHashExcludingReceipts: delivery?.payload?.treeHashExcludingReceipts ?? record.payload?.treeHashExcludingReceipts,
         expectedArtifacts: delivery?.payload?.artefatos ?? record.payload?.artefatos ?? []
       });
       ctx.receipts.push({ missaoId: record.missaoId, status: 'valid', path: receiptPath });

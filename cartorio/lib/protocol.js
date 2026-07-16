@@ -95,7 +95,7 @@ export function errorResponse(error) {
     code: normalizeErrorCode(error),
     rawCode: error?.code ?? error?.name ?? 'ERROR',
     message: error?.message ?? String(error),
-    details: error?.details ?? null
+    details: sanitizeDetails(error?.details)
   };
 }
 
@@ -127,4 +127,11 @@ export function exitCodeForProtocolCode(code) {
     GIT_CONTEXT_MISSING: 66,
     DAEMON_UNAVAILABLE: 69
   }[code] ?? 1;
+}
+
+function sanitizeDetails(details) {
+  if (details == null) {
+    return null;
+  }
+  return JSON.parse(JSON.stringify(details));
 }

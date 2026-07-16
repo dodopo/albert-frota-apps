@@ -17,7 +17,9 @@ const uid = process.getuid?.() ?? 501;
 const runId = 'agent:neo:subagent:audit-00000000-0000-4000-8000-000000000001';
 const missingRunId = 'agent:neo:subagent:audit-00000000-0000-4000-8000-000000000002';
 const humanRunId = `human:${uid}`;
-const commit = 'a'.repeat(40);
+const parentCommit = 'a'.repeat(40);
+const treeScope = 'cartorio.git-tree.v1:app-files-excluding-mission-receipts';
+const treeHashExcludingReceipts = 'd'.repeat(64);
 const artifact = { path: 'package.json', blobSha256: 'b'.repeat(64) };
 const codeManifestHash = 'c'.repeat(64);
 
@@ -86,7 +88,12 @@ async function writeSessions(t, entries = { [runId]: 'session-ok' }) {
 async function buildVerifiedLedger(t, id = runId) {
   const store = storeFor(t);
   await store.append(request('abrir', 'm-audit', 'open', { assunto: 'audit' }, id));
-  await store.append(request('entregar', 'm-audit', 'deliver', { commit, artefatos: [artifact] }, id));
+  await store.append(request('entregar', 'm-audit', 'deliver', {
+    parentCommit,
+    treeScope,
+    treeHashExcludingReceipts,
+    artefatos: [artifact]
+  }, id));
   await store.append(request('coletar', 'm-audit', 'collect', { confirmacao: 'ok' }, id));
 }
 

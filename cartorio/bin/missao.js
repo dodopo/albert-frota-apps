@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { canonicalize, parseCanonicalJson } from '../lib/canonical-json.js';
 import { collectArtifactBlobs, normalizeArtifactPath } from '../lib/artifact-blobs.js';
 import { auditLocalRepository, formatAuditReport } from '../lib/audit.js';
+import { computeTreeHashExcludingReceipts } from '../lib/remote-verify.js';
 import {
   DaemonUnavailableError,
   errorResponse,
@@ -54,7 +55,7 @@ Opcoes:
   --idempotency-key <key>     Chave idempotente; default deterministico
   --actor-uid <uid>           UID alegado; ledgerd sempre usa o UID real do peer
   --payload-json <json>       Objeto JSON adicional do payload
-  --commit <sha>              Campo commit no payload
+  --commit <sha>              Commit Git base da entrega; default HEAD
   --artefato <path[:sha256]>  Pode repetir; sha declarado e conferido contra o blob git
   --expected-ledger-seq <n>   Cabeca esperada para anti-rollback
   --expected-ledger-head-hash <hash>
@@ -155,7 +156,15 @@ async function buildPayload(command, options) {
       cwd: process.cwd(),
       commit: options.commit
     });
+    const tree = await computeTreeHashExcludingReceipts({
+      repo: resolved.repoRoot,
+      commit: resolved.commit,
+      appDir: ''
+    });
     payload.commit = resolved.commit;
+    payload.parentCommit = resolved.commit;
+    payload.treeScope = tree.treeScope;
+    payload.treeHashExcludingReceipts = tree.treeHashExcludingReceipts;
     payload.cartorioRepoRoot = resolved.repoRoot;
     payload.artefatos = resolved.artifacts;
   } else if (options.commit) {

@@ -58,7 +58,9 @@ Payload minimo futuro:
 {
   "missaoId": "F1-...",
   "runId": "agent:neo:subagent:<uuid>",
-  "commit": "<sha>",
+  "parentCommit": "<sha-do-pai-do-commit-do-receipt>",
+  "treeScope": "cartorio.git-tree.v1:app-files-excluding-mission-receipts",
+  "treeHashExcludingReceipts": "<sha256>",
   "artefatos": [
     { "path": "cartorio/PROTOCOL.md", "blobSha256": "<sha256>" }
   ]
@@ -134,7 +136,9 @@ Receipt futuro em `.cartorio/missoes/<missaoId>.receipt.json`:
   "missaoId": "F1-...",
   "ledgerHeadHash": "<sha256>",
   "ledgerSeq": 1,
-  "commit": "<sha>",
+  "parentCommit": "<sha-do-pai-do-commit-atual>",
+  "treeScope": "cartorio.git-tree.v1:app-files-excluding-mission-receipts",
+  "treeHashExcludingReceipts": "<sha256>",
   "artefatos": [
     { "path": "cartorio/PROTOCOL.md", "blobSha256": "<sha256>" }
   ],
@@ -152,3 +156,31 @@ Receipt futuro em `.cartorio/missoes/<missaoId>.receipt.json`:
 ```
 
 O required check remoto deve distinguir `receipt-valid`, `break-glass-valid` e `fail`.
+
+### Digest canonico da arvore
+
+`treeScope = cartorio.git-tree.v1:app-files-excluding-mission-receipts`.
+
+No required check remoto, o escopo e a arvore Git do app no commit verificado. Em monorepo, o app e
+o `--app-dir` passado ao verificador; sem `--app-dir`, e a raiz do repo. O digest e reconstruido
+somente a partir de objetos Git versionados no commit:
+
+1. listar todos os arquivos rastreados sob o escopo com `git ls-tree -r --name-only`;
+2. converter cada caminho para relativo ao escopo;
+3. excluir apenas caminhos que casem com `.cartorio/missoes/*.receipt.json`;
+4. para cada arquivo restante, ler o blob do commit e calcular `sha256` dos bytes do conteudo;
+5. montar a lista `[{ "path": "<relativo>", "blobSha256": "<sha256>" }]`;
+6. ordenar por `path` em ordem lexicografica deterministica;
+7. serializar a lista com JSON canonico do Cartorio e calcular `sha256` UTF-8 dessa serializacao.
+
+O receipt assina esse `treeHashExcludingReceipts` junto com `parentCommit`. Assim o arquivo de
+receipt pode entrar no commit atual sem autorreferencia: ele nao assina o hash do commit atual, e sim
+o pai exato e todo o conteudo efetivo do commit excluindo somente receipts de missao.
+
+### Break-glass remoto
+
+Break-glass vive em `.cartorio/break-glass/<id>.json` e e artefato posterior. O campo `commit`
+assinado aponta para o commit socorrido, nao para o commit que contem o break-glass. O required check
+valida assinatura por role `break-glass`, expiry contra a hora observada, blobs no commit alvo e
+single-use do `id` no historico alcancavel. Sucesso de break-glass sempre sai como
+`break-glass-valid` com marca explicita de excecao.
