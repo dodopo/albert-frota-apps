@@ -70,6 +70,20 @@ test('gate: coleta antes da entrega e rejeitada', async () => {
   }
 });
 
+test('gate passo10: entregar missao nunca aberta falha fechado', async () => {
+  const t = await tempCase('deliver-without-open');
+  try {
+    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    await assert.rejects(
+      () => store.append(request('entregar', 'm-never-opened', 'idem-deliver', { commit: 'abc123' })),
+      /transicao de missao rejeitada/
+    );
+    await assert.rejects(() => stat(t.ledgerPath), /ENOENT/);
+  } finally {
+    await t.cleanup();
+  }
+});
+
 test('gate: dois appends simultaneos mantem seq monotônico e cadeia valida', async () => {
   const t = await tempCase('concurrent');
   try {
@@ -85,6 +99,32 @@ test('gate: dois appends simultaneos mantem seq monotônico e cadeia valida', as
     const head = await createLedgerStore({ ledgerPath: t.ledgerPath }).readHead();
     assert.equal(head.ledgerSeq, 2);
     assert.notEqual(head.ledgerHeadHash, ZERO_HASH);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test('gate passo10: entregas concorrentes da mesma missao tem uma vencedora e uma conflito', async () => {
+  const t = await tempCase('same-mission-concurrent-delivery');
+  try {
+    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    await store.append(request('abrir', 'm-same-delivery', 'idem-open', { assunto: 'abrir' }));
+
+    const a = JSON.stringify(request('entregar', 'm-same-delivery', 'idem-deliver-a', { commit: 'a'.repeat(40) }));
+    const b = JSON.stringify(request('entregar', 'm-same-delivery', 'idem-deliver-b', { commit: 'b'.repeat(40) }));
+    const results = await Promise.allSettled([
+      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', a, '--ledger', t.ledgerPath], { cwd: root }),
+      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', b, '--ledger', t.ledgerPath], { cwd: root })
+    ]);
+
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    const rejected = results.find((result) => result.status === 'rejected').reason;
+    assert.equal(rejected.code, 65);
+    assert.match(rejected.stderr, /INVALID_STATE/);
+
+    const head = await createLedgerStore({ ledgerPath: t.ledgerPath }).readHead();
+    assert.equal(head.ledgerSeq, 2);
   } finally {
     await t.cleanup();
   }

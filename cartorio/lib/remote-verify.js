@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { basename } from 'node:path';
 import { promisify } from 'node:util';
 
 import { canonicalize, canonicalizeToBytes, parseCanonicalJson } from './canonical-json.js';
+import { normalizeArtifactPath } from './artifact-blobs.js';
 import {
   BREAK_GLASS_ROLE,
   deriveKeyIdFromPublicKey,
@@ -110,8 +112,9 @@ export async function verifyRemoteReceipt({
   });
 }
 
-async function validateReceiptAtCommit({ context, receipt, keyring, manifest }) {
+async function validateReceiptAtCommit({ context, path, receipt, keyring, manifest }) {
   validateReceiptHistoryFields(receipt);
+  validateReceiptPathMatchesMission(path, receipt);
   const tree = await computeTreeHashExcludingReceipts(context);
   const expectedArtifacts = [];
   for (const artifact of receipt.artefatos) {
@@ -180,6 +183,15 @@ async function validateBreakGlassAtCommit({ context, path, artifact, keyring, no
   }
   await assertBreakGlassSingleUse(context, path, artifact.id);
   return { artifact };
+}
+
+function validateReceiptPathMatchesMission(path, receipt) {
+  if (basename(path) !== `${receipt.missaoId}.receipt.json`) {
+    throw remoteError('RECEIPT_PATH_MISMATCH', 'nome do receipt diverge do missaoId assinado', {
+      path,
+      missaoId: receipt.missaoId
+    });
+  }
 }
 
 function validateReceiptHistoryFields(receipt) {
@@ -286,10 +298,11 @@ async function assertBreakGlassSingleUse(context, _path, id) {
 }
 
 async function artifactHashAtCommit(context, path) {
-  const gitPath = appPath(context, path);
+  const normalizedPath = normalizeArtifactPath(path);
+  const gitPath = appPath(context, normalizedPath);
   const blob = await git(['cat-file', 'blob', `${context.commit}:${gitPath}`], context.repo, { encoding: 'buffer' });
   return {
-    path,
+    path: normalizedPath,
     blobSha256: createHash('sha256').update(blob.stdout).digest('hex')
   };
 }

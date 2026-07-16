@@ -61,6 +61,36 @@ test('passo9: receipt valido retorna receipt-valid', async () => {
   }
 });
 
+test('passo10: receipt valido em caminho divergente do missaoId retorna fail', async () => {
+  const fx = await tempRepo('receipt-path-mismatch');
+  try {
+    await createReceiptCommit(fx, { receiptFilename: 'missao-errada.receipt.json' });
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+    assert.equal(result.json.details.receiptResults[0].code, 'RECEIPT_PATH_MISMATCH');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('passo10: path traversal em artefato assinado no receipt retorna fail', async () => {
+  const fx = await tempRepo('receipt-artifact-traversal');
+  try {
+    await createReceiptCommit(fx, {
+      receiptOverrides: {
+        artefatos: [{ path: '../entrega.txt', blobSha256: '1'.repeat(64) }]
+      }
+    });
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+    assert.equal(result.json.details.receiptResults[0].code, 'INVALID_STATE');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('passo9: receipt ausente retorna fail', async () => {
   const fx = await tempRepo('absent');
   try {
@@ -252,7 +282,7 @@ test('passo9: keyId ausente do keyring retorna fail', async () => {
   }
 });
 
-async function createReceiptCommit(fx, { receiptOverrides = {}, artifactOverrides = {}, mutateReceipt = null } = {}) {
+async function createReceiptCommit(fx, { receiptOverrides = {}, artifactOverrides = {}, mutateReceipt = null, receiptFilename = null } = {}) {
   receiptCounter += 1;
   await writeFile(join(fx.dir, 'entrega.txt'), `conteudo ${receiptCounter}\n`);
   await commitAll(fx.dir, 'mission content');
@@ -266,7 +296,7 @@ async function createReceiptCommit(fx, { receiptOverrides = {}, artifactOverride
     ...receiptOverrides
   });
   const finalReceipt = mutateReceipt ? mutateReceipt(receipt) : receipt;
-  const receiptPath = join(fx.dir, '.cartorio', 'missoes', `${receipt.missaoId}.receipt.json`);
+  const receiptPath = join(fx.dir, '.cartorio', 'missoes', receiptFilename ?? `${receipt.missaoId}.receipt.json`);
   await writeJson(receiptPath, finalReceipt);
   await commitAll(fx.dir, 'mission receipt');
   return { receiptPath, receipt: finalReceipt, receiptText: await readFile(receiptPath, 'utf8') };

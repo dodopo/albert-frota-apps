@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -116,6 +117,10 @@ function codes(result) {
   return result.findings.map((finding) => finding.code);
 }
 
+function hashRecord(recordWithoutHash) {
+  return createHash('sha256').update(canonicalize(recordWithoutHash), 'utf8').digest('hex');
+}
+
 async function rewriteLedger(t, mutate) {
   const records = (await readFile(t.ledgerPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
   mutate(records);
@@ -176,6 +181,45 @@ test('gate passo8: corrupcoes de ledger sao achados nao-zero', async () => {
   }
 });
 
+test('gate passo10: escrita direta no ledger sem ledgerd e detectada pelo anti-rollback', async () => {
+  const t = await tempCase('direct-ledger-write');
+  try {
+    await writeSessions(t);
+    await buildVerifiedLedger(t);
+    const records = (await readFile(t.ledgerPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    const previous = records.at(-1);
+    const direct = {
+      version: previous.version,
+      seq: previous.seq + 1,
+      prevHash: previous.hash,
+      eventId: '00000000-0000-4000-8000-000000000010',
+      eventType: 'missao.aberta',
+      missaoId: 'm-direct-ledger-write',
+      idempotencyKey: 'direct-open',
+      payloadHash: 'f'.repeat(64),
+      payload: { missaoId: 'm-direct-ledger-write' },
+      actorUid: uid,
+      actor: `uid:${uid}`,
+      claimedActorUid: uid,
+      runId,
+      ts: '2026-07-16T18:00:00.000Z',
+      stateBefore: 'inexistente',
+      stateAfter: 'aberta',
+      codeManifestHash,
+      buildId: 'audit-test'
+    };
+    direct.hash = hashRecord(direct);
+    await writeFile(t.ledgerPath, `${records.map((record) => canonicalize(record)).join('\n')}\n${canonicalize(direct)}\n`, 'utf8');
+    await chmod(t.ledgerPath, 0o600);
+
+    const result = await report(t);
+    assert.equal(result.ok, false);
+    assert.ok(codes(result).includes('LEDGER_ROLLBACK_DETECTED'), codes(result).join(', '));
+  } finally {
+    await t.cleanup();
+  }
+});
+
 test('gate passo8: receipts ausente, invalido e stale reprovam', async () => {
   const missing = await tempCase('receipt-missing');
   try {
@@ -214,6 +258,26 @@ test('gate passo8: receipts ausente, invalido e stale reprovam', async () => {
     assert.ok(codes(result).includes('RECEIPT_STALE'));
   } finally {
     await stale.cleanup();
+  }
+});
+
+test('gate passo10: break-glass no commit sem importacao posterior fica pendente no audit', async () => {
+  const t = await tempCase('break-glass-pending');
+  try {
+    await writeSessions(t);
+    await buildVerifiedLedger(t);
+    await writeFile(join(t.breakGlassDir, 'bg-pendente.json'), `${JSON.stringify({
+      id: 'bg-pendente',
+      commit: 'a'.repeat(40),
+      incidentRef: 'INC-bg-pendente'
+    })}\n`, 'utf8');
+
+    const result = await report(t);
+    assert.equal(result.ok, true, JSON.stringify(result.findings, null, 2));
+    assert.ok(codes(result).includes('BREAK_GLASS_PENDING_RECONCILIATION'), codes(result).join(', '));
+    assert.equal(result.summary.warning, 1);
+  } finally {
+    await t.cleanup();
   }
 });
 
