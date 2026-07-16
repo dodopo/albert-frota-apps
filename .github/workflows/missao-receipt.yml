@@ -1,0 +1,23 @@
+name: missao-receipt
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  missao-receipt:
+    name: missao-receipt
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify mission receipt
+        run: node cartorio/bin/verify-receipt.js --app-dir cartorio --commit "$GITHUB_SHA"
