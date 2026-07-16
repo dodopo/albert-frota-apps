@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { canonicalize, parseCanonicalJson } from '../lib/canonical-json.js';
 import { collectArtifactBlobs, normalizeArtifactPath } from '../lib/artifact-blobs.js';
+import { auditLocalRepository, formatAuditReport } from '../lib/audit.js';
 import {
   DaemonUnavailableError,
   errorResponse,
@@ -26,6 +27,7 @@ const HELP = `missao ${packageJson.version}
 
 Uso:
   missao <comando> --missao-id <id> --run-id <run> [opcoes]
+  missao audit [--ledger <path> --receipt-dir <dir> --sessions-root <dir> --json]
   missao --self-check [--uid-helper <path> --uid-manifest <path>]
 
 Comandos:
@@ -33,10 +35,20 @@ Comandos:
   entregar   Registra entrega com runId e artefatos declarados
   coletar    Registra coleta/confirmacao de artefatos
   status     Consulta estado via ledgerd sem escrever no ledger
-  audit      Stub de auditoria local neste passo
+  audit      Auditoria local do ledger, receipts e proveniencia
 
 Opcoes:
   --socket <path>             UDS do ledgerd (ou CARTORIO_LEDGERD_SOCKET)
+  --ledger <path>             Ledger local para audit (ou CARTORIO_LEDGER_PATH)
+  --ledger-state <path>       Head anti-rollback para audit
+  --snapshot-dir <path>       Diretorio de snapshots para audit
+  --receipt-dir <dir>         Diretorio .cartorio/missoes para audit
+  --keyring <path>            Keyring publico para validar receipts
+  --private-key <path>        Chave privada local; audit confere permissao se existir
+  --sessions-root <dir>       Raiz OpenClaw com <agent>/sessions/sessions.json
+  --sessions-json <path>      sessions.json unico, ou template com {agentId}
+  --break-glass-dir <dir>     Diretorio .cartorio/break-glass para audit
+  --json                      Saida JSON do audit
   --missao-id, --id <id>      Identificador da missao
   --run-id <run>              Proveniencia agent:/human:/manual:
   --idempotency-key <key>     Chave idempotente; default deterministico
@@ -77,6 +89,26 @@ async function main(argv = process.argv.slice(2)) {
   }
 
   const options = parseOptions(argv.slice(1));
+  if (command === 'audit') {
+    const report = await auditLocalRepository({
+      ledgerPath: options.ledgerPath,
+      statePath: options.statePath,
+      snapshotDir: options.snapshotDir,
+      socketPath: options.socket,
+      receiptDir: options.receiptDir,
+      keyringPath: options.keyringPath,
+      privateKeyPath: options.privateKeyPath,
+      sessionsRoot: options.sessionsRoot,
+      sessionsPath: options.sessionsPath,
+      breakGlassDir: options.breakGlassDir
+    });
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      process.stdout.write(formatAuditReport(report));
+    }
+    return report.ok ? 0 : 1;
+  }
   const socketPath = options.socket ?? process.env.CARTORIO_LEDGERD_SOCKET ?? DEFAULT_SOCKET;
   const envelope = await buildEnvelope(command, options);
   const response = await requestLedgerd(socketPath, envelope);
@@ -274,6 +306,36 @@ function parseOptions(args) {
       case '--socket':
       case '--ledgerd-socket':
         options.socket = next();
+        break;
+      case '--ledger':
+        options.ledgerPath = next();
+        break;
+      case '--ledger-state':
+        options.statePath = next();
+        break;
+      case '--snapshot-dir':
+        options.snapshotDir = next();
+        break;
+      case '--receipt-dir':
+        options.receiptDir = next();
+        break;
+      case '--keyring':
+        options.keyringPath = next();
+        break;
+      case '--private-key':
+        options.privateKeyPath = next();
+        break;
+      case '--sessions-root':
+        options.sessionsRoot = next();
+        break;
+      case '--sessions-json':
+        options.sessionsPath = next();
+        break;
+      case '--break-glass-dir':
+        options.breakGlassDir = next();
+        break;
+      case '--json':
+        options.json = true;
         break;
       case '--missao-id':
       case '--id':
