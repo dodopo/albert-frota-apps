@@ -142,6 +142,7 @@ export async function acceptAuthenticatedPeer({
   verifyManifest = true,
   timeoutMs = 5000,
   socketMode = '0660',
+  enforceClaimedActor = true,
   onListening
 } = {}) {
   if (!socketPath) {
@@ -194,7 +195,9 @@ export async function acceptAuthenticatedPeer({
 
   const peer = parseHelperOutput(stdout, stderr);
   const claimedActor = parseClaimedActor(peer.payload);
-  assertPeerMatchesActor(peer, claimedActor);
+  if (enforceClaimedActor) {
+    assertPeerMatchesActor(peer, claimedActor);
+  }
   assertPeerMatchesActor(peer, actor);
 
   return {

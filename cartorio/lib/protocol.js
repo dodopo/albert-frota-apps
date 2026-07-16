@@ -1,4 +1,4 @@
-export const protocolVersion = 'cartorio-cli-ledgerd/v0.2-stub';
+export const protocolVersion = 'cartorio-cli-ledgerd/v0.3-uds';
 
 export const SUPPORTED_COMMANDS = ['abrir', 'entregar', 'coletar', 'status', 'audit'];
 
@@ -40,6 +40,13 @@ export class InvalidStateError extends CartorioError {
   }
 }
 
+export class GitContextMissingError extends CartorioError {
+  constructor(message = 'contexto git ausente para resolver artefatos', details = {}) {
+    super('GIT_CONTEXT_MISSING', message, details);
+    this.name = 'GitContextMissingError';
+  }
+}
+
 export class DaemonUnavailableError extends CartorioError {
   constructor(message = 'ledgerd indisponivel', details = {}) {
     super('DAEMON_UNAVAILABLE', message, details);
@@ -47,17 +54,77 @@ export class DaemonUnavailableError extends CartorioError {
   }
 }
 
-export function makeEnvelope({ command, payload = {}, idempotencyKey, actorUid, runId } = {}) {
+export function makeEnvelope({ command, payload = {}, idempotencyKey, actorUid, actorGid, runId, responseSocket } = {}) {
   if (!SUPPORTED_COMMANDS.includes(command)) {
     throw new InvalidStateError(`comando fora do protocolo: ${command}`);
   }
 
-  return {
+  const envelope = compactEnvelope({
     protocol: protocolVersion,
     command,
     idempotencyKey,
     actorUid,
+    actorGid,
     runId,
     payload
+  });
+  if (responseSocket) {
+    envelope.responseSocket = responseSocket;
+  }
+  return envelope;
+}
+
+function compactEnvelope(envelope) {
+  return Object.fromEntries(Object.entries(envelope).filter(([, value]) => value !== undefined));
+}
+
+export function okResponse({ command, result, peer } = {}) {
+  return {
+    ok: true,
+    protocol: protocolVersion,
+    command,
+    peer,
+    result
   };
+}
+
+export function errorResponse(error) {
+  return {
+    ok: false,
+    protocol: protocolVersion,
+    code: normalizeErrorCode(error),
+    rawCode: error?.code ?? error?.name ?? 'ERROR',
+    message: error?.message ?? String(error),
+    details: error?.details ?? null
+  };
+}
+
+export function normalizeErrorCode(error) {
+  const code = error?.code ?? error?.name;
+  if (code === 'CONFLICT') {
+    return 'CONFLICT';
+  }
+  if (code === 'INVALID_STATE') {
+    return 'INVALID_STATE';
+  }
+  if (code === 'GIT_CONTEXT_MISSING') {
+    return 'GIT_CONTEXT_MISSING';
+  }
+  if (code === 'DAEMON_UNAVAILABLE') {
+    return 'DAEMON_UNAVAILABLE';
+  }
+  if (code === 'EACCES' || code === 'EPERM' || String(code ?? '').startsWith('UID_PEER_')) {
+    return 'PERMISSION_DENIED';
+  }
+  return 'INVALID_STATE';
+}
+
+export function exitCodeForProtocolCode(code) {
+  return {
+    CONFLICT: 73,
+    PERMISSION_DENIED: 77,
+    INVALID_STATE: 65,
+    GIT_CONTEXT_MISSING: 66,
+    DAEMON_UNAVAILABLE: 69
+  }[code] ?? 1;
 }

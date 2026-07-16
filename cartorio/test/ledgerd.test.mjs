@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { canonicalize } from '../lib/canonical-json.js';
 import { createLedgerStore, ZERO_HASH } from '../lib/ledger-store.js';
+import { makeEnvelope } from '../lib/protocol.js';
 import { uidPeerHelperBinary } from '../lib/uid-peer.js';
 
 const execFileAsync = promisify(execFile);
@@ -172,7 +173,7 @@ test('gate: tmp orfao de crash e recuperado no startup', async () => {
   }
 });
 
-test('gate: UID efetivo divergente do ator alegado e rejeitado ponta a ponta', async () => {
+test('gate: UID efetivo divergente do ator alegado e normalizado pelo ledgerd', async () => {
   const t = await tempCase('uid');
   try {
     const socketPath = join(t.dir, 'ledgerd.sock');
@@ -189,14 +190,21 @@ test('gate: UID efetivo divergente do ator alegado e rejeitado ponta a ponta', a
       child.once('message', resolveReady);
       child.once('error', rejectReady);
     });
-    await send(socketPath, {
-      ...request('abrir', 'm-uid', 'idem-open', { assunto: 'abrir' }),
+    const envelope = makeEnvelope({
+      command: 'abrir',
+      idempotencyKey: 'idem-open',
       actorUid: uid + 1,
-      actorGid: gid
+      actorGid: gid,
+      runId,
+      payload: { missaoId: 'm-uid', assunto: 'abrir' }
     });
+    await send(socketPath, canonicalize(envelope));
     const code = await new Promise((resolveClose) => child.once('close', resolveClose));
-    assert.equal(code, 1);
-    assert.match(stderr, /UID_PEER_ACTOR_MISMATCH/);
+    assert.equal(code, 0);
+    assert.equal(stderr, '');
+    const [record] = (await readFile(t.ledgerPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(record.actorUid, uid);
+    assert.equal(record.claimedActorUid, uid + 1);
   } finally {
     await t.cleanup();
   }
@@ -221,7 +229,7 @@ test('gate: ledgerd recusa subir quando binario do helper diverge do manifesto',
     await assert.rejects(
       () => execFileAsync(process.execPath, ['bin/ledgerd.js', '--self-check', '--uid-helper', helperPath, '--uid-manifest', manifestPath], { cwd: root }),
       (error) => {
-        assert.equal(error.code, 1);
+        assert.equal(error.code, 77);
         assert.match(error.stderr, /UID_PEER_HELPER_UNTRUSTED/);
         return true;
       }
@@ -249,7 +257,7 @@ test('gate: ledgerd recusa subir quando binario do helper nao existe', async () 
     await assert.rejects(
       () => execFileAsync(process.execPath, ['bin/ledgerd.js', '--self-check', '--uid-helper', missingHelperPath, '--uid-manifest', manifestPath], { cwd: root }),
       (error) => {
-        assert.equal(error.code, 1);
+        assert.equal(error.code, 77);
         assert.match(error.stderr, /UID_PEER_HELPER_UNTRUSTED/);
         return true;
       }
@@ -264,7 +272,7 @@ async function send(socketPath, payload) {
     const socket = net.createConnection(socketPath);
     socket.once('error', rejectSend);
     socket.once('connect', () => {
-      socket.end(`${JSON.stringify(payload)}\n`);
+      socket.end(typeof payload === 'string' ? payload : `${JSON.stringify(payload)}\n`);
     });
     socket.once('close', resolveSend);
   });

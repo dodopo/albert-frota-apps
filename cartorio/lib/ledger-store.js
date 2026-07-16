@@ -4,12 +4,17 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { canonicalize } from './canonical-json.js';
 import { appendFileAtomic, recoverAtomicOrphans, writeFileAtomic } from './atomic-fs.js';
+import { defaultKeyringPath, defaultPrivateKeyPath } from './keyring.js';
 import { withLock } from './lock.js';
 import { ConflictError, DaemonUnavailableError, InvalidStateError } from './protocol.js';
+import { buildReceipt, receiptPathForMission, writeSignedReceipt } from './receipt.js';
 import { eventTypeForCommand, nextState, STATES } from './state-machine.js';
 
 export const ZERO_HASH = '0'.repeat(64);
 export const LEDGER_RECORD_VERSION = 'cartorio.ledger-record/v1';
+const MISSAO_ID_MAX_LENGTH = 120;
+const MISSAO_ID_ALLOWED = /^[a-z0-9][a-z0-9._-]*$/;
+const CONTROL = /[\u0000-\u001f\u007f]/;
 
 export function createUnavailableError(message) {
   return new DaemonUnavailableError(message);
@@ -32,18 +37,26 @@ export function createLedgerStore({
   statePath = process.env.CARTORIO_LEDGER_STATE_PATH || `${ledgerPath}.head.json`,
   lockPath = process.env.CARTORIO_LEDGER_LOCK_PATH || `${ledgerPath}.lock`,
   snapshotDir = process.env.CARTORIO_LEDGER_SNAPSHOT_DIR || join(dirname(ledgerPath), 'snapshots'),
-  codeManifestHash = process.env.CARTORIO_CODE_MANIFEST_HASH || null
+  codeManifestHash = process.env.CARTORIO_CODE_MANIFEST_HASH || null,
+  buildId = process.env.CARTORIO_BUILD_ID || null,
+  receiptDir = process.env.CARTORIO_RECEIPT_DIR || null,
+  privateKeyPath = process.env.CARTORIO_LEDGERD_KEY_PATH || defaultPrivateKeyPath(),
+  keyringPath = process.env.CARTORIO_KEYRING_PATH || defaultKeyringPath()
 } = {}) {
-  return new LedgerStore({ ledgerPath, statePath, lockPath, snapshotDir, codeManifestHash });
+  return new LedgerStore({ ledgerPath, statePath, lockPath, snapshotDir, codeManifestHash, buildId, receiptDir, privateKeyPath, keyringPath });
 }
 
 export class LedgerStore {
-  constructor({ ledgerPath, statePath, lockPath, snapshotDir, codeManifestHash }) {
+  constructor({ ledgerPath, statePath, lockPath, snapshotDir, codeManifestHash, buildId, receiptDir, privateKeyPath, keyringPath }) {
     this.ledgerPath = ledgerPath;
     this.statePath = statePath;
     this.lockPath = lockPath;
     this.snapshotDir = snapshotDir;
     this.codeManifestHash = codeManifestHash;
+    this.buildId = buildId;
+    this.receiptDir = receiptDir;
+    this.privateKeyPath = privateKeyPath;
+    this.keyringPath = keyringPath;
   }
 
   async recoverOrphans() {
@@ -57,6 +70,19 @@ export class LedgerStore {
     return loaded.head;
   }
 
+  async readMissionStatus(missaoId) {
+    await this.recoverOrphans();
+    const loaded = await this.loadAndValidate();
+    const id = validateMissaoId(missaoId);
+    return {
+      ok: true,
+      missaoId: id,
+      state: loaded.missions.get(id) ?? STATES.INEXISTENTE,
+      head: loaded.head,
+      lastEvent: findLastMissionEvent(loaded.records, id)
+    };
+  }
+
   async append(input) {
     return withLock(this.lockPath, async () => {
       await this.recoverOrphans();
@@ -66,11 +92,12 @@ export class LedgerStore {
       const normalized = normalizeInput(input);
       const idempotent = findIdempotent(loaded.records, normalized);
       if (idempotent?.samePayload) {
+        const receipt = await this.receiptForRecord(idempotent.record);
         return {
           ok: true,
           idempotent: true,
           event: idempotent.record,
-          receipt: makeReceipt(idempotent.record)
+          receipt
         };
       }
       if (idempotent && !idempotent.samePayload) {
@@ -101,7 +128,8 @@ export class LedgerStore {
         ts: normalized.ts,
         stateBefore: currentState,
         stateAfter: resultingState,
-        codeManifestHash: normalized.codeManifestHash ?? this.codeManifestHash
+        codeManifestHash: normalized.codeManifestHash ?? this.codeManifestHash,
+        buildId: normalized.buildId ?? this.buildId
       };
       const record = { ...base, hash: hashRecord(base) };
       await appendFileAtomic(this.ledgerPath, canonicalize(record), { mode: 0o600 });
@@ -114,12 +142,13 @@ export class LedgerStore {
         updatedAt: new Date().toISOString()
       };
       await writeFileAtomic(this.statePath, `${JSON.stringify(nextHead, null, 2)}\n`, { mode: 0o600 });
+      const receipt = await this.emitReceiptIfVerified(record, loaded.records);
 
       return {
         ok: true,
         idempotent: false,
         event: record,
-        receipt: makeReceipt(record)
+        receipt
       };
     });
   }
@@ -201,6 +230,53 @@ export class LedgerStore {
     await assertHeadState(this.statePath, head);
     return { records, missions, head };
   }
+
+  async receiptForRecord(record) {
+    if (record.stateAfter !== STATES.VERIFICADA) {
+      return makeUnsignedReceipt(record);
+    }
+    const receiptDir = receiptDirForRecord(this.receiptDir, record);
+    if (!receiptDir) {
+      return makeUnsignedReceipt(record);
+    }
+    try {
+      const text = await readFile(receiptPathForMission(receiptDir, record.missaoId), 'utf8');
+      return JSON.parse(text);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
+      return makeUnsignedReceipt(record);
+    }
+  }
+
+  async emitReceiptIfVerified(record, previousRecords) {
+    if (record.stateAfter !== STATES.VERIFICADA) {
+      return makeUnsignedReceipt(record);
+    }
+    const delivery = findLastMissionEventByType(previousRecords, record.missaoId, 'missao.entregue');
+    const deliveryPayload = delivery?.payload ?? {};
+    const receiptDir = receiptDirForRecord(this.receiptDir, delivery ?? record);
+    if (!receiptDir) {
+      return makeUnsignedReceipt(record);
+    }
+    const receipt = buildReceipt({
+      missaoId: record.missaoId,
+      ledgerHeadHash: record.hash,
+      ledgerSeq: record.seq,
+      commit: deliveryPayload.commit ?? record.payload?.commit,
+      artefatos: deliveryPayload.artefatos ?? record.payload?.artefatos ?? [],
+      runId: record.runId,
+      ator: record.actor,
+      ts: record.ts,
+      codeManifestHash: record.codeManifestHash,
+      buildId: record.buildId
+    });
+    return writeSignedReceipt(receipt, receiptPathForMission(receiptDir, record.missaoId), {
+      privateKeyPath: this.privateKeyPath,
+      keyringPath: this.keyringPath
+    });
+  }
 }
 
 async function readLedgerRecords(ledgerPath) {
@@ -280,10 +356,7 @@ function normalizeInput(input) {
   const command = input.command;
   const eventType = input.eventType ?? eventTypeForCommand(command);
   const payload = input.payload && typeof input.payload === 'object' && !Array.isArray(input.payload) ? input.payload : {};
-  const missaoId = String(input.missaoId ?? payload.missaoId ?? '');
-  if (!missaoId) {
-    throw new InvalidStateError('missaoId obrigatorio');
-  }
+  const missaoId = validateMissaoId(input.missaoId ?? payload.missaoId);
   const idempotencyKeyValue = String(input.idempotencyKey ?? '');
   if (!idempotencyKeyValue) {
     throw new InvalidStateError('idempotencyKey obrigatoria');
@@ -316,7 +389,8 @@ function normalizeInput(input) {
     claimedActorUid: input.claimedActorUid ?? input.actorUid ?? input.atorUid ?? null,
     runId,
     ts,
-    codeManifestHash: input.codeManifestHash ?? null
+    codeManifestHash: input.codeManifestHash ?? null,
+    buildId: input.buildId ?? null
   };
 }
 
@@ -346,7 +420,33 @@ function findIdempotent(records, input) {
   };
 }
 
-function makeReceipt(record) {
+function findLastMissionEvent(records, missaoId) {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    if (records[index].missaoId === missaoId) {
+      return records[index];
+    }
+  }
+  return null;
+}
+
+function findLastMissionEventByType(records, missaoId, eventType) {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    if (records[index].missaoId === missaoId && records[index].eventType === eventType) {
+      return records[index];
+    }
+  }
+  return null;
+}
+
+function receiptDirForRecord(configuredReceiptDir, record) {
+  if (configuredReceiptDir) {
+    return configuredReceiptDir;
+  }
+  const repoRoot = record?.payload?.cartorioRepoRoot;
+  return repoRoot ? join(repoRoot, '.cartorio', 'missoes') : null;
+}
+
+function makeUnsignedReceipt(record) {
   return {
     version: 'cartorio.ledger-receipt.unsigned/v1',
     eventId: record.eventId,
@@ -357,6 +457,7 @@ function makeReceipt(record) {
     ator: record.actor,
     actorUid: record.actorUid,
     codeManifestHash: record.codeManifestHash,
+    buildId: record.buildId,
     signature: null
   };
 }
@@ -373,6 +474,31 @@ function stripHash(record) {
 
 function idempotencyKey(missaoId, key) {
   return `${missaoId}\u0000${key}`;
+}
+
+export function validateMissaoId(value) {
+  if (typeof value !== 'string') {
+    throw new InvalidStateError('missaoId obrigatorio');
+  }
+  if (value.length === 0 || value.length > MISSAO_ID_MAX_LENGTH) {
+    throw new InvalidStateError('missaoId com tamanho invalido', {
+      maxLength: MISSAO_ID_MAX_LENGTH,
+      actualLength: value.length
+    });
+  }
+  if (value !== value.normalize('NFC') || CONTROL.test(value)) {
+    throw new InvalidStateError('missaoId contem controle ou Unicode nao canonico', { missaoId: value });
+  }
+  if (value.includes('/') || value.includes('\\') || value.includes('..')) {
+    throw new InvalidStateError('missaoId rejeitado por risco de path injection', { missaoId: value });
+  }
+  if (value !== value.toLowerCase()) {
+    throw new InvalidStateError('missaoId precisa ser ASCII minusculo para evitar colisao de case', { missaoId: value });
+  }
+  if (!MISSAO_ID_ALLOWED.test(value)) {
+    throw new InvalidStateError('missaoId fora do conjunto ASCII permitido', { missaoId: value });
+  }
+  return value;
 }
 
 function sha256(text) {

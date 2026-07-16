@@ -108,6 +108,7 @@ Evento futuro no ledger JSONL:
 - `CONFLICT`: conflito de idempotencia ou concorrencia.
 - `PERMISSION_DENIED`: UID/GID real do peer nao autorizado, ou ator alegado diverge do peer.
 - `INVALID_STATE`: transicao invalida para o estado atual da missao.
+- `GIT_CONTEXT_MISSING`: comando `entregar` precisa de um repo git para resolver artefatos por blob.
 - `DAEMON_UNAVAILABLE`: socket/daemon indisponivel ou esqueleto sem daemon real.
 
 Formato de erro:

@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLedgerStore } from '../lib/ledger-store.js';
-import { protocolVersion } from '../lib/protocol.js';
+import { canonicalize, parseCanonicalJson } from '../lib/canonical-json.js';
+import { errorResponse, exitCodeForProtocolCode, okResponse, protocolVersion } from '../lib/protocol.js';
 import {
   acceptAuthenticatedPeer,
   buildUidPeerHelper,
@@ -66,21 +67,84 @@ async function main(argv = process.argv.slice(2)) {
     const peer = await acceptAuthenticatedPeer({
       socketPath,
       ...helperOptions(argv),
+      enforceClaimedActor: false,
       onListening: () => notifyParentReady(socketPath)
     });
-    const claimed = JSON.parse(peer.payload || '{}');
-    const result = await store.append({
-      ...claimed,
-      peerUid: peer.uid,
-      actorUid: peer.uid,
-      claimedActorUid: claimed.actorUid ?? claimed.atorUid ?? null,
-      codeManifestHash: manifest.codeManifestHash
-    });
-    console.log(JSON.stringify({ ok: true, peer: { uid: peer.uid, gid: peer.gid }, result }));
-    return 0;
+    const response = await handlePeerRequest({ store, peer, manifest });
+    console.log(JSON.stringify(response));
+    await sendResponse(response);
+    return response.ok ? 0 : exitCodeForProtocolCode(response.code);
   }
 
   throw Object.assign(new Error(`ledgerd: opcao desconhecida: ${argv.join(' ')}`), { code: 'USAGE' });
+}
+
+async function handlePeerRequest({ store, peer, manifest }) {
+  let envelope;
+  try {
+    envelope = parseCanonicalJson(peer.payload);
+    if (envelope.protocol !== protocolVersion) {
+      throw Object.assign(new Error(`protocolo incompativel: ${envelope.protocol}`), { code: 'INVALID_STATE' });
+    }
+    const result = await executeCommand({ store, envelope, peer, manifest });
+    return {
+      ...okResponse({
+        command: envelope.command,
+        peer: { uid: peer.uid, gid: peer.gid },
+        result
+      }),
+      responseSocket: envelope.responseSocket ?? null
+    };
+  } catch (error) {
+    return {
+      ...errorResponse(error),
+      command: envelope?.command ?? null,
+      responseSocket: envelope?.responseSocket ?? null
+    };
+  }
+}
+
+async function executeCommand({ store, envelope, peer, manifest }) {
+  const payload = envelope.payload && typeof envelope.payload === 'object' ? envelope.payload : {};
+  if (envelope.command === 'status') {
+    return store.readMissionStatus(payload.missaoId ?? envelope.missaoId);
+  }
+  if (envelope.command === 'audit') {
+    return {
+      ok: true,
+      audit: 'stub',
+      message: 'audit local ainda nao implementado neste passo',
+      codeManifestHash: manifest.codeManifestHash
+    };
+  }
+  return store.append({
+    ...envelope,
+    missaoId: payload.missaoId ?? envelope.missaoId,
+    expectedLedgerSeq: payload.expectedLedgerSeq,
+    expectedLedgerHeadHash: payload.expectedLedgerHeadHash,
+    payload,
+    peerUid: peer.uid,
+    actorUid: peer.uid,
+    actorGid: peer.gid,
+    claimedActorUid: envelope.actorUid ?? envelope.atorUid ?? null,
+    codeManifestHash: manifest.codeManifestHash,
+    buildId: manifest.buildId
+  });
+}
+
+async function sendResponse(response) {
+  const socketPath = response?.result?.responseSocket ?? response?.responseSocket;
+  if (!socketPath) {
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    const socket = net.createConnection(socketPath);
+    socket.once('error', reject);
+    socket.once('connect', () => {
+      socket.end(canonicalize(response));
+    });
+    socket.once('close', resolve);
+  });
 }
 
 function notifyParentReady(socketPath) {
@@ -112,13 +176,15 @@ if (process.argv[1] && resolveCliPath(import.meta.url) === process.argv[1]) {
   main().then((code) => {
     process.exitCode = code;
   }).catch((error) => {
+    const response = errorResponse(error);
     console.error(JSON.stringify({
       ok: false,
-      code: error.code ?? error.name ?? 'ERROR',
-      message: error.message,
-      details: error.details ?? null
+      code: response.code,
+      rawCode: response.rawCode,
+      message: response.message,
+      details: response.details
     }));
-    process.exitCode = error.code === 'USAGE' ? 2 : 1;
+    process.exitCode = error.code === 'USAGE' ? 2 : exitCodeForProtocolCode(response.code);
   });
 }
 
