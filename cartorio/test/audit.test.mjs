@@ -117,6 +117,32 @@ function codes(result) {
   return result.findings.map((finding) => finding.code);
 }
 
+function auditCliArgs(t) {
+  return [
+    'bin/missao.js',
+    'audit',
+    '--ledger',
+    t.ledgerPath,
+    '--ledger-state',
+    t.statePath,
+    '--snapshot-dir',
+    t.snapshotDir,
+    '--socket',
+    t.socketPath,
+    '--receipt-dir',
+    t.receiptDir,
+    '--keyring',
+    t.keyringPath,
+    '--private-key',
+    t.privateKeyPath,
+    '--sessions-root',
+    t.sessionsRoot,
+    '--break-glass-dir',
+    t.breakGlassDir,
+    '--json'
+  ];
+}
+
 function hashRecord(recordWithoutHash) {
   return createHash('sha256').update(canonicalize(recordWithoutHash), 'utf8').digest('hex');
 }
@@ -317,27 +343,16 @@ test('gate passo8: sessions.json ausente faz downgrade explicito e exit 0', asyn
     assert.ok(codes(result).includes('SOURCE_UNAVAILABLE'));
     assert.equal(result.sessions.downgrade, true);
 
-    const cli = await execFileAsync(process.execPath, [
-      'bin/missao.js',
-      'audit',
-      '--ledger',
-      t.ledgerPath,
-      '--ledger-state',
-      t.statePath,
-      '--snapshot-dir',
-      t.snapshotDir,
-      '--receipt-dir',
-      t.receiptDir,
-      '--keyring',
-      t.keyringPath,
-      '--private-key',
-      t.privateKeyPath,
-      '--sessions-root',
-      t.sessionsRoot,
-      '--break-glass-dir',
-      t.breakGlassDir,
-      '--json'
-    ], { cwd: root });
+    const inaccessibleSocketDir = join(t.dir, 'unreadable-prod-run');
+    await mkdir(inaccessibleSocketDir, { recursive: true, mode: 0o000 });
+    await chmod(inaccessibleSocketDir, 0o000);
+    const cli = await execFileAsync(process.execPath, auditCliArgs(t), {
+      cwd: root,
+      env: {
+        ...process.env,
+        CARTORIO_LEDGERD_SOCKET: join(inaccessibleSocketDir, 'ledgerd.sock')
+      }
+    });
     assert.equal(JSON.parse(cli.stdout).sessions.downgrade, true);
   } finally {
     await t.cleanup();
@@ -381,27 +396,7 @@ test('gate passo8: missao audit retorna codigo nao-zero para bypass silencioso',
     await buildVerifiedLedger(t);
     await chmod(t.ledgerPath, 0o644);
     await assert.rejects(
-      () => execFileAsync(process.execPath, [
-        'bin/missao.js',
-        'audit',
-        '--ledger',
-        t.ledgerPath,
-        '--ledger-state',
-        t.statePath,
-        '--snapshot-dir',
-        t.snapshotDir,
-        '--receipt-dir',
-        t.receiptDir,
-        '--keyring',
-        t.keyringPath,
-        '--private-key',
-        t.privateKeyPath,
-        '--sessions-root',
-        t.sessionsRoot,
-        '--break-glass-dir',
-        t.breakGlassDir,
-        '--json'
-      ], { cwd: root }),
+      () => execFileAsync(process.execPath, auditCliArgs(t), { cwd: root }),
       (error) => {
         assert.equal(error.code, 1);
         assert.ok(JSON.parse(error.stdout).findings.some((finding) => finding.code === 'LEDGER_PERMISSION_OPEN'));
