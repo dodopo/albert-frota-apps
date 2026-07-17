@@ -25,4 +25,5 @@ jobs:
         env:
           CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT: ${{ secrets.CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT }}
           CARTORIO_BOOTSTRAP_BASE_REF: origin/main
-        run: node cartorio/bin/verify-receipt.js --app-dir cartorio --commit "$GITHUB_SHA"
+          RECEIPT_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node cartorio/bin/verify-receipt.js --app-dir cartorio --commit "$RECEIPT_COMMIT"
