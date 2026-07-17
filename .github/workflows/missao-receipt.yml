@@ -15,9 +15,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Fetch main for bootstrap base
+        run: git fetch --no-tags origin main:refs/remotes/origin/main || true
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
       - name: Verify mission receipt
+        env:
+          CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT: ${{ secrets.CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT }}
+          CARTORIO_BOOTSTRAP_BASE_REF: origin/main
         run: node cartorio/bin/verify-receipt.js --app-dir cartorio --commit "$GITHUB_SHA"
