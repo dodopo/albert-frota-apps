@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { fork, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -63,12 +63,18 @@ async function runWithLedgerdRaw(t, args, options = {}) {
   child.stderr.on('data', (chunk) => {
     stderr += chunk;
   });
-  await new Promise((resolveReady, rejectReady) => {
+  const closePromise = new Promise((resolveClose) => child.once('close', resolveClose));
+  const readyPromise = new Promise((resolveReady, rejectReady) => {
     child.once('message', resolveReady);
     child.once('error', rejectReady);
   });
+  await Promise.race([
+    readyPromise,
+    closePromise.then((code) => {
+      throw new Error(`ledgerd encerrou antes de ouvir socket code=${code} stderr=${stderr} stdout=${stdout}`);
+    })
+  ]);
 
-  const closePromise = new Promise((resolveClose) => child.once('close', resolveClose));
   let result = null;
   try {
     result = await execFileAsync(process.execPath, [resolve(root, 'bin/missao.js'), ...args, '--socket', t.socketPath], {
@@ -295,25 +301,51 @@ test('gate passo5: estado invalido usa codigo distinto INVALID_STATE', async () 
   }
 });
 
-test('gate passo5: UID divergente do ator alegado e normalizado pelo daemon', async () => {
+test('gate passo5: escrita com UID divergente do ator alegado falha e nao grava ledger', async () => {
   const t = await tempCase('uid');
   try {
     const claimed = (process.getuid?.() ?? 0) + 1;
-    const result = await runWithLedgerd(t, [
+    await runWithLedgerdFailure(t, [
       'abrir',
       '--missao-id',
-      'uid-normalizado',
+      'uid-divergente',
       '--run-id',
       runId,
       '--idempotency-key',
       'uid-open',
       '--actor-uid',
       String(claimed)
-    ]);
+    ], 77, /UID_PEER_ACTOR_MISMATCH/);
+    await assert.rejects(() => stat(t.ledgerPath), /ENOENT/);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test('gate producao: resposta do ledgerd nao depende do TMPDIR privado do cliente', async () => {
+  const t = await tempCase('resp');
+  try {
+    const privateTmp = join(t.dir, 'private-tmp');
+    await mkdir(privateTmp, { mode: 0o700 });
+    await chmod(privateTmp, 0o700);
+    const result = await runWithLedgerd(t, [
+      'abrir',
+      '--missao-id',
+      'response-channel',
+      '--run-id',
+      runId,
+      '--idempotency-key',
+      'response-open'
+    ], {
+      env: {
+        ...process.env,
+        TMPDIR: `${privateTmp}/`
+      }
+    });
     assert.equal(JSON.parse(result.cli.stdout).status.state, 'aberta');
-    const [record] = (await readFile(t.ledgerPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-    assert.equal(record.actorUid, process.getuid?.());
-    assert.equal(record.claimedActorUid, claimed);
+    const daemonResponse = JSON.parse(result.daemon.stdout);
+    assert.match(daemonResponse.responseSocket, /^\/tmp\/cartorio-missao-[^/]+\/response-[0-9a-f]{32}\.sock$/);
+    assert.ok(!daemonResponse.responseSocket.startsWith(privateTmp));
   } finally {
     await t.cleanup();
   }

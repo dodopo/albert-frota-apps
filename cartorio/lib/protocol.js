@@ -33,6 +33,13 @@ export class PermissionDeniedError extends CartorioError {
   }
 }
 
+export class UidPeerActorMismatchError extends CartorioError {
+  constructor(message = 'UID efetivo do peer diverge do ator alegado', details = {}) {
+    super('UID_PEER_ACTOR_MISMATCH', message, details);
+    this.name = 'UidPeerActorMismatchError';
+  }
+}
+
 export class InvalidStateError extends CartorioError {
   constructor(message = 'estado invalido para a transicao solicitada', details = {}) {
     super('INVALID_STATE', message, details);
@@ -113,6 +120,9 @@ export function normalizeErrorCode(error) {
   if (code === 'DAEMON_UNAVAILABLE') {
     return 'DAEMON_UNAVAILABLE';
   }
+  if (code === 'UID_PEER_ACTOR_MISMATCH') {
+    return 'UID_PEER_ACTOR_MISMATCH';
+  }
   if (code === 'EACCES' || code === 'EPERM' || String(code ?? '').startsWith('UID_PEER_')) {
     return 'PERMISSION_DENIED';
   }
@@ -125,7 +135,8 @@ export function exitCodeForProtocolCode(code) {
     PERMISSION_DENIED: 77,
     INVALID_STATE: 65,
     GIT_CONTEXT_MISSING: 66,
-    DAEMON_UNAVAILABLE: 69
+    DAEMON_UNAVAILABLE: 69,
+    UID_PEER_ACTOR_MISMATCH: 77
   }[code] ?? 1;
 }
 

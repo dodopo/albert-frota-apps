@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import net from 'node:net';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { canonicalize, parseCanonicalJson } from '../lib/canonical-json.js';
 import { collectArtifactBlobs, normalizeArtifactPath } from '../lib/artifact-blobs.js';
@@ -23,6 +22,7 @@ import { verifyUidPeerHelperManifest } from '../lib/uid-peer.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
 const DEFAULT_SOCKET = '/Users/cartorio/run/ledgerd.sock';
+const RESPONSE_TMP_PARENT = '/tmp';
 
 const HELP = `missao ${packageJson.version}
 
@@ -180,8 +180,9 @@ async function buildPayload(command, options) {
 }
 
 async function requestLedgerd(socketPath, envelope) {
-  const tempDir = await mkdtemp(join(tmpdir(), 'cartorio-missao-'));
-  const responseSocket = join(tempDir, 'response.sock');
+  const tempDir = await mkdtemp(join(RESPONSE_TMP_PARENT, 'cartorio-missao-'));
+  await chmod(tempDir, 0o711);
+  const responseSocket = join(tempDir, `response-${randomBytes(16).toString('hex')}.sock`);
   let server;
   let cancelResponse;
   try {
