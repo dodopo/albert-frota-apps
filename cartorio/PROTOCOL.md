@@ -164,7 +164,20 @@ Receipt futuro em `.cartorio/missoes/<missaoId>.receipt.json`:
 }
 ```
 
-O required check remoto deve distinguir `receipt-valid`, `break-glass-valid` e `fail`.
+O required check remoto deve distinguir `receipt-valid`, `break-glass-valid`, `bootstrap-valid` e
+`fail`.
+
+### Gate F2 / PR 1
+
+O PR 1 do F2 e a instalacao do juiz. Ele altera o proprio verificador antes de existir keyring
+versionado ou receipt real capaz de valida-lo. Portanto, por contrato de obra, esse PR deve FALHAR no
+`missao-receipt` e so pode ser mergeado pela ultima excecao de settings da historia do repo, depois
+de a consultoria reproduzir a suite inteira em clone limpo sob uid 501.
+
+Depois do PR 1, o PR 2 introduz o keyring inicial por `bootstrap-valid`: diff exclusivo de
+`.cartorio/keys/keyring.json`, fingerprint esperado vindo de fora do repo e historico de `main` ainda
+sem keyring. Depois disso, bootstrap se auto-inutiliza e todo PR comum precisa passar por
+`receipt-valid`; keyring alterado junto com receipt normal falha fechado.
 
 ### Digest canonico da arvore
 

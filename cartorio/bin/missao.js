@@ -36,6 +36,7 @@ Comandos:
   entregar   Registra entrega com runId e artefatos declarados
   coletar    Registra coleta/confirmacao de artefatos
   status     Consulta estado via ledgerd sem escrever no ledger
+  listar     Lista missoes via ledgerd sem escrever no ledger
   audit      Auditoria local do ledger, receipts e proveniencia
 
 Opcoes:
@@ -55,6 +56,8 @@ Opcoes:
   --idempotency-key <key>     Chave idempotente; default deterministico
   --actor-uid <uid>           UID alegado; ledgerd sempre usa o UID real do peer
   --payload-json <json>       Objeto JSON adicional do payload
+  --cursor <ledgerSeq>        Cursor de listar
+  --limit <n>                 Limite de listar, teto aplicado pelo daemon
   --commit <sha>              Commit Git base da entrega; default HEAD
   --artefato <path[:sha256]>  Pode repetir; sha declarado e conferido contra o blob git
   --expected-ledger-seq <n>   Cabeca esperada para anti-rollback
@@ -127,13 +130,13 @@ async function buildEnvelope(command, options) {
     actorGid: process.getgid?.(),
     runId: options.runId
   });
-  if (!base.runId && command !== 'status' && command !== 'audit') {
+  if (!base.runId && command !== 'status' && command !== 'listar' && command !== 'audit') {
     throw Object.assign(new Error('runId obrigatorio para comandos de escrita'), { code: 'INVALID_STATE' });
   }
-  if (!base.idempotencyKey && command !== 'status' && command !== 'audit') {
+  if (!base.idempotencyKey && command !== 'status' && command !== 'listar' && command !== 'audit') {
     base.idempotencyKey = defaultIdempotencyKey(base);
   }
-  if ((command === 'status' || command === 'audit') && !base.idempotencyKey) {
+  if ((command === 'status' || command === 'listar' || command === 'audit') && !base.idempotencyKey) {
     base.idempotencyKey = `${command}:${payload.missaoId ?? 'all'}`;
   }
   return base;
@@ -145,7 +148,7 @@ async function buildPayload(command, options) {
   if (missaoId) {
     payload.missaoId = String(missaoId);
   }
-  if (!payload.missaoId && command !== 'audit') {
+  if (!payload.missaoId && command !== 'listar' && command !== 'audit') {
     throw Object.assign(new Error('missaoId obrigatorio'), { code: 'INVALID_STATE' });
   }
   if (options.artefato.length > 0) {
@@ -175,6 +178,12 @@ async function buildPayload(command, options) {
   }
   if (options.expectedLedgerHeadHash != null) {
     payload.expectedLedgerHeadHash = String(options.expectedLedgerHeadHash);
+  }
+  if (options.cursor != null) {
+    payload.cursor = Number(options.cursor);
+  }
+  if (options.limit != null) {
+    payload.limit = Number(options.limit);
   }
   return payload;
 }
@@ -364,6 +373,12 @@ function parseOptions(args) {
         break;
       case '--payload-json':
         options.payloadJson = JSON.parse(next());
+        break;
+      case '--cursor':
+        options.cursor = next();
+        break;
+      case '--limit':
+        options.limit = next();
         break;
       case '--commit':
         options.commit = next();

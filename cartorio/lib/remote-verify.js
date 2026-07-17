@@ -41,18 +41,49 @@ export async function verifyRemoteReceipt({
   repo = process.cwd(),
   commit = 'HEAD',
   appDir = null,
-  now = new Date()
+  now = new Date(),
+  expectedBootstrapKeyringFingerprint = process.env.CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT ?? null,
+  bootstrapBaseRef = process.env.CARTORIO_BOOTSTRAP_BASE_REF ?? null
 } = {}) {
   const context = await gitContext(repo, commit, appDir);
   const observedAt = now.toISOString();
-  const keyring = await readJsonAtCommit(context, appPath(context, KEYRING_PATH));
+  const keyringPath = appPath(context, KEYRING_PATH);
+  const keyringAtHead = await tryReadJsonAtCommit(context, keyringPath);
+  if (!keyringAtHead.ok) {
+    throw remoteError('KEYRING_MISSING', 'keyring ausente no commit verificado', { keyringPath });
+  }
+  const parentKeyring = await tryReadJsonAtCommit({ ...context, commit: context.parentCommit }, keyringPath);
+  if (!parentKeyring.ok) {
+    return validateBootstrapAtCommit({
+      context,
+      keyringPath,
+      keyringAtHead: keyringAtHead.value,
+      observedAt,
+      expectedFingerprint: expectedBootstrapKeyringFingerprint,
+      bootstrapBaseRef
+    });
+  }
+  const keyring = parentKeyring.value;
   validateKeyring(keyring);
   const manifest = await readJsonAtCommit(context, appPath(context, CODE_MANIFEST_PATH));
   validateCodeManifest(manifest);
 
-  const receiptCandidates = await listFilesAtCommit(context, appPath(context, RECEIPT_DIR));
+  const changed = await changedFilesForCommit(context);
+  const missionReceipts = changed.filter((entry) => isReceiptPath(unappPath(context, entry)));
+  if (missionReceipts.length > 1) {
+    throw remoteError('REMOTE_RECEIPT_COUNT_INVALID', 'PR precisa conter exatamente um receipt de missao', {
+      receiptCount: missionReceipts.length,
+      receiptPaths: missionReceipts
+    });
+  }
+  if (missionReceipts.length === 1 && keyringFingerprint(keyringAtHead.value) !== keyringFingerprint(parentKeyring.value)) {
+    throw remoteError('KEYRING_CHANGED_WITH_RECEIPT', 'receipt-valid valida contra keyring herdado e recusa keyring alterado no mesmo commit', {
+      keyringPath,
+      receiptPath: missionReceipts[0]
+    });
+  }
   const receiptResults = [];
-  for (const path of receiptCandidates.filter((entry) => entry.endsWith('.receipt.json'))) {
+  for (const path of missionReceipts) {
     try {
       const receipt = await readJsonAtCommit(context, path);
       const result = await validateReceiptAtCommit({ context, path, receipt, keyring, manifest });
@@ -110,6 +141,45 @@ export async function verifyRemoteReceipt({
     receiptResults,
     breakGlassResults
   });
+}
+
+async function validateBootstrapAtCommit({ context, keyringPath, keyringAtHead, observedAt, expectedFingerprint, bootstrapBaseRef }) {
+  if (!expectedFingerprint) {
+    throw remoteError('BOOTSTRAP_FINGERPRINT_MISSING', 'bootstrap-valid exige fingerprint esperado fora do repo');
+  }
+  validateKeyring(keyringAtHead);
+  const actualFingerprint = keyringFingerprint(keyringAtHead);
+  if (actualFingerprint !== expectedFingerprint) {
+    throw remoteError('BOOTSTRAP_FINGERPRINT_MISMATCH', 'fingerprint do keyring inicial diverge do esperado externo', {
+      expectedFingerprint,
+      actualFingerprint
+    });
+  }
+  const changed = await changedFilesForCommit(context);
+  if (changed.length !== 1 || changed[0] !== keyringPath) {
+    throw remoteError('BOOTSTRAP_DIFF_NOT_EXCLUSIVE', 'bootstrap-valid exige diff exclusivo do keyring', {
+      changedFiles: changed,
+      expectedOnly: keyringPath
+    });
+  }
+  const baseRef = await resolveBootstrapBaseRef(context, bootstrapBaseRef);
+  const existsInMain = await keyringExistsInHistory(context, baseRef, keyringPath);
+  if (existsInMain) {
+    throw remoteError('BOOTSTRAP_ALREADY_USED', 'keyring ja existe no historico da main; bootstrap auto-inutilizado', {
+      baseRef,
+      keyringPath
+    });
+  }
+  return {
+    ok: true,
+    state: 'bootstrap-valid',
+    commit: context.commit,
+    parentCommit: context.parentCommit,
+    observedAt,
+    keyringPath,
+    keyringFingerprint: actualFingerprint,
+    baseRef
+  };
 }
 
 async function validateReceiptAtCommit({ context, path, receipt, keyring, manifest }) {
@@ -346,6 +416,44 @@ async function readJsonAtCommit(context, path) {
   return parseJsonText(result.stdout, path);
 }
 
+async function tryReadJsonAtCommit(context, path) {
+  const result = await tryGit(['cat-file', 'blob', `${context.commit}:${path}`], context.repo);
+  if (!result.ok) {
+    return { ok: false, error: result.stderr };
+  }
+  return { ok: true, value: parseJsonText(result.stdout, path) };
+}
+
+async function changedFilesForCommit(context) {
+  const result = await git(['diff-tree', '--no-commit-id', '--name-only', '-r', context.commit], context.repo);
+  return result.stdout.trim().split('\n').filter(Boolean).sort();
+}
+
+async function resolveBootstrapBaseRef(context, configuredRef) {
+  const candidates = [configuredRef, 'origin/main', 'main'].filter(Boolean);
+  for (const ref of candidates) {
+    const result = await tryGit(['rev-parse', '--verify', `${ref}^{commit}`], context.repo);
+    if (result.ok) {
+      return ref;
+    }
+  }
+  throw remoteError('BOOTSTRAP_BASE_REF_UNAVAILABLE', 'referencia da main indisponivel para validar bootstrap', {
+    candidates
+  });
+}
+
+async function keyringExistsInHistory(context, ref, keyringPath) {
+  const result = await tryGit(['log', '--format=%H', ref, '--', keyringPath], context.repo);
+  if (!result.ok) {
+    throw remoteError('BOOTSTRAP_HISTORY_UNAVAILABLE', 'falha ao consultar historico da main para keyring', {
+      ref,
+      keyringPath,
+      stderr: result.stderr
+    });
+  }
+  return result.stdout.trim().length > 0;
+}
+
 function parseJsonText(text, path) {
   try {
     return parseCanonicalJson(text);
@@ -420,6 +528,15 @@ function appPath(context, path) {
   return `${context.appDir}/${normalizedPath}`;
 }
 
+function unappPath(context, path) {
+  const normalizedPath = String(path ?? '').replace(/^\/+/, '');
+  if (!context.appDir) {
+    return normalizedPath;
+  }
+  const prefix = `${context.appDir}/`;
+  return normalizedPath.startsWith(prefix) ? normalizedPath.slice(prefix.length) : normalizedPath;
+}
+
 function normalizeAppDir(value) {
   if (value == null || value === '' || value === '.') {
     return '';
@@ -433,6 +550,10 @@ function normalizeAppDir(value) {
 
 function sha256(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+function keyringFingerprint(keyring) {
+  return sha256(canonicalize(keyring));
 }
 
 export function formatRemoteResult(result) {

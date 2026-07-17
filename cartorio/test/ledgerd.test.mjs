@@ -48,9 +48,37 @@ test('gate: fluxo feliz abrir -> entregar -> coletar deixa missao verificada', a
     const coletar = await store.append(request('coletar', 'm-happy', 'idem-collect', { confirmacao: 'ok' }));
 
     assert.equal(abrir.event.stateAfter, 'aberta');
-    assert.equal(entregar.event.stateAfter, 'entregue');
+    assert.equal(entregar.event.stateAfter, 'delivered-pending-git');
+    assert.equal(entregar.event.runIdDeclarado, runId);
+    assert.equal(entregar.event.runIdVerificado, null);
+    assert.equal(entregar.event.runIdStatus, 'nao-verificada');
     assert.equal(coletar.event.stateAfter, 'verificada');
     assert.equal(coletar.event.seq, 3);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test('f2-pr1: listar e read-only, paginado e redigido', async () => {
+  const t = await tempCase('listar');
+  try {
+    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    await store.append(request('abrir', 'm-listar-a', 'idem-open-a', { assunto: 'abrir-a' }));
+    await store.append(request('abrir', 'm-listar-b', 'idem-open-b', { assunto: 'abrir-b' }));
+
+    const listed = await store.listMissions({ limit: 1 });
+    assert.equal(listed.ok, true);
+    assert.equal(listed.missions.length, 1);
+    assert.equal(listed.missions[0].missaoId, 'm-listar-a');
+    assert.equal(listed.missions[0].runIdDeclarado, runId);
+    assert.equal(listed.missions[0].runIdVerificado, null);
+    assert.equal(listed.missions[0].runIdStatus, 'nao-verificada');
+    assert.equal(listed.missions[0].payloadHash.length, 64);
+    assert.equal(listed.missions[0].commit, null);
+    assert.equal(listed.nextCursor, 1);
+
+    const head = await store.readHead();
+    assert.equal(head.ledgerSeq, 2);
   } finally {
     await t.cleanup();
   }
