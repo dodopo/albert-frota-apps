@@ -213,7 +213,7 @@ test('gate: tmp orfao de crash e recuperado no startup', async () => {
   }
 });
 
-test('gate: UID efetivo divergente do ator alegado e normalizado pelo ledgerd', async () => {
+test('gate: escrita com UID efetivo divergente do ator alegado e rejeitada pelo ledgerd', async () => {
   const t = await tempCase('uid');
   try {
     const socketPath = join(t.dir, 'ledgerd.sock');
@@ -221,8 +221,13 @@ test('gate: UID efetivo divergente do ator alegado e normalizado pelo ledgerd', 
       cwd: root,
       silent: true
     });
+    let stdout = '';
     let stderr = '';
+    child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
     });
@@ -240,11 +245,82 @@ test('gate: UID efetivo divergente do ator alegado e normalizado pelo ledgerd', 
     });
     await send(socketPath, canonicalize(envelope));
     const code = await new Promise((resolveClose) => child.once('close', resolveClose));
+    assert.equal(code, 77);
+    assert.equal(stderr, '');
+    const response = JSON.parse(stdout);
+    assert.equal(response.ok, false);
+    assert.equal(response.code, 'UID_PEER_ACTOR_MISMATCH');
+    assert.equal(response.details.peerUid, uid);
+    assert.equal(response.details.claimedActorUid, uid + 1);
+    await assert.rejects(() => stat(t.ledgerPath), /ENOENT/);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test('gate: leitura com UID alegado divergente normaliza e nao escreve no ledger', async () => {
+  const t = await tempCase('uid-read');
+  try {
+    const socketPath = join(t.dir, 'ledgerd.sock');
+    const child = fork(resolve(root, 'bin/ledgerd.js'), ['--serve-once', socketPath, '--ledger', t.ledgerPath], {
+      cwd: root,
+      silent: true
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    await new Promise((resolveReady, rejectReady) => {
+      child.once('message', resolveReady);
+      child.once('error', rejectReady);
+    });
+    const envelope = makeEnvelope({
+      command: 'status',
+      actorUid: uid + 1,
+      actorGid: gid,
+      payload: { missaoId: 'm-uid-read' }
+    });
+    await send(socketPath, canonicalize(envelope));
+    const code = await new Promise((resolveClose) => child.once('close', resolveClose));
     assert.equal(code, 0);
     assert.equal(stderr, '');
-    const [record] = (await readFile(t.ledgerPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-    assert.equal(record.actorUid, uid);
-    assert.equal(record.claimedActorUid, uid + 1);
+    const response = JSON.parse(stdout);
+    assert.equal(response.ok, true);
+    assert.equal(response.peer.uid, uid);
+    assert.equal(response.result.state, 'inexistente');
+    await assert.rejects(() => stat(t.ledgerPath), /ENOENT/);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test('gate: --append-json rejeita peerUid divergente do ator alegado e nao escreve ledger', async () => {
+  const t = await tempCase('uid-append-json');
+  try {
+    const payload = JSON.stringify({
+      command: 'abrir',
+      missaoId: 'm-uid-append-json',
+      idempotencyKey: 'idem-open',
+      peerUid: uid,
+      actorUid: uid + 1,
+      runId,
+      payload: { missaoId: 'm-uid-append-json' }
+    });
+    await assert.rejects(
+      () => execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', payload, '--ledger', t.ledgerPath], { cwd: root }),
+      (error) => {
+        assert.equal(error.code, 77);
+        assert.match(error.stderr, /UID_PEER_ACTOR_MISMATCH/);
+        return true;
+      }
+    );
+    await assert.rejects(() => stat(t.ledgerPath), /ENOENT/);
   } finally {
     await t.cleanup();
   }

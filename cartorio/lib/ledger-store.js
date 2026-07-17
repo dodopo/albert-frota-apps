@@ -6,7 +6,7 @@ import { canonicalize } from './canonical-json.js';
 import { appendFileAtomic, recoverAtomicOrphans, writeFileAtomic } from './atomic-fs.js';
 import { defaultKeyringPath, defaultPrivateKeyPath } from './keyring.js';
 import { withLock } from './lock.js';
-import { ConflictError, DaemonUnavailableError, InvalidStateError } from './protocol.js';
+import { ConflictError, DaemonUnavailableError, InvalidStateError, UidPeerActorMismatchError } from './protocol.js';
 import { buildReceipt, receiptPathForMission, writeSignedReceipt } from './receipt.js';
 import { eventTypeForCommand, nextState, STATES } from './state-machine.js';
 
@@ -367,6 +367,13 @@ function normalizeInput(input) {
   if (!Number.isInteger(actorUid) || actorUid < 0) {
     throw new InvalidStateError('actorUid real obrigatorio');
   }
+  const claimedActorUid = normalizeClaimedActorUid(input);
+  if (claimedActorUid != null && claimedActorUid !== actorUid) {
+    throw new UidPeerActorMismatchError('UID efetivo do peer diverge do ator alegado', {
+      peerUid: actorUid,
+      claimedActorUid
+    });
+  }
   const runId = String(input.runId ?? '');
   if (!runId) {
     throw new InvalidStateError('runId obrigatorio');
@@ -388,12 +395,24 @@ function normalizeInput(input) {
     payload,
     payloadHash: sha256(canonicalize(material)),
     actorUid,
-    claimedActorUid: input.claimedActorUid ?? input.actorUid ?? input.atorUid ?? null,
+    claimedActorUid,
     runId,
     ts,
     codeManifestHash: input.codeManifestHash ?? null,
     buildId: input.buildId ?? null
   };
+}
+
+function normalizeClaimedActorUid(input) {
+  const raw = input.claimedActorUid ?? input.actorUid ?? input.atorUid ?? null;
+  if (raw == null) {
+    return null;
+  }
+  const claimed = Number(raw);
+  if (!Number.isInteger(claimed) || claimed < 0) {
+    throw new InvalidStateError('claimedActorUid invalido');
+  }
+  return claimed;
 }
 
 function assertExpectedHead(input, head) {

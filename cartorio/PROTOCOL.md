@@ -9,7 +9,9 @@ canonicalizacao e crypto fica fora deste esqueleto.
 - Producao futura: UDS em `/Users/cartorio/run/ledgerd.sock`.
 - O componente que aceita a conexao precisa autenticar a credencial do kernel do peer e congelar a
   identidade no inicio da conexao.
-- Neste passo: nenhum socket real e aberto.
+- O cliente recebe resposta por um UDS efemero em `/tmp/cartorio-missao-*`, dentro de diretorio
+  `0711` com nome de socket aleatorio. Em macOS, a fronteira pratica e o caminho imprevisivel em
+  diretorio nao-listavel; o modo do arquivo de socket nao e a fronteira de leitura.
 
 ## Envelope
 
@@ -109,6 +111,8 @@ Evento futuro no ledger JSONL:
 
 - `CONFLICT`: conflito de idempotencia ou concorrencia.
 - `PERMISSION_DENIED`: UID/GID real do peer nao autorizado, ou ator alegado diverge do peer.
+- `UID_PEER_ACTOR_MISMATCH`: comando de escrita rejeitado porque o UID real autenticado do peer
+  diverge do `actorUid`/ator alegado no envelope.
 - `INVALID_STATE`: transicao invalida para o estado atual da missao.
 - `GIT_CONTEXT_MISSING`: comando `entregar` precisa de um repo git para resolver artefatos por blob.
 - `DAEMON_UNAVAILABLE`: socket/daemon indisponivel ou esqueleto sem daemon real.
