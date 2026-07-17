@@ -109,6 +109,12 @@ async function executeCommand({ store, envelope, peer, manifest }) {
   if (envelope.command === 'status') {
     return store.readMissionStatus(payload.missaoId ?? envelope.missaoId);
   }
+  if (envelope.command === 'listar') {
+    return store.listMissions({
+      cursor: payload.cursor ?? payload.afterLedgerSeq ?? 0,
+      limit: payload.limit ?? 25
+    });
+  }
   if (envelope.command === 'audit') {
     return {
       ok: true,

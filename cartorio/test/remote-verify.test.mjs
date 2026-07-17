@@ -49,6 +49,20 @@ async function tempRepo(name) {
   };
 }
 
+async function tempBootstrapRepo(name) {
+  const dir = await mkdtemp(join(tmpdir(), `cartorio-remote-${name}-`));
+  await git(dir, ['init', '-b', 'main']);
+  await git(dir, ['config', 'user.email', 'neo@example.invalid']);
+  await git(dir, ['config', 'user.name', 'Neo Test']);
+  await writeFile(join(dir, 'README.md'), 'base sem keyring\n');
+  await commitAll(dir, 'base without keyring');
+  await git(dir, ['switch', '-c', 'pr-bootstrap']);
+  return {
+    dir,
+    cleanup: () => rm(dir, { recursive: true, force: true })
+  };
+}
+
 test('passo9: receipt valido retorna receipt-valid', async () => {
   const fx = await tempRepo('valid');
   try {
@@ -56,6 +70,64 @@ test('passo9: receipt valido retorna receipt-valid', async () => {
     const result = await runVerify(fx.dir);
     assert.equal(result.status, 0);
     assert.equal(result.json.state, 'receipt-valid');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('f2-pr1: bootstrap-valid aceita keyring inicial com fingerprint externo e diff exclusivo', async () => {
+  const fx = await tempBootstrapRepo('bootstrap-valid');
+  try {
+    const keys = makeKeys();
+    await mkdir(join(fx.dir, '.cartorio', 'keys'), { recursive: true });
+    await writeJson(join(fx.dir, '.cartorio', 'keys', 'keyring.json'), keys.keyring);
+    await commitAll(fx.dir, 'bootstrap keyring');
+    const result = await runVerify(fx.dir, [
+      '--bootstrap-keyring-fingerprint',
+      keyringFingerprint(keys.keyring),
+      '--bootstrap-base-ref',
+      'main'
+    ]);
+    assert.equal(result.status, 0);
+    assert.equal(result.json.state, 'bootstrap-valid');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('f2-pr1: bootstrap-valid falha sem fingerprint externo', async () => {
+  const fx = await tempBootstrapRepo('bootstrap-no-fingerprint');
+  try {
+    const keys = makeKeys();
+    await mkdir(join(fx.dir, '.cartorio', 'keys'), { recursive: true });
+    await writeJson(join(fx.dir, '.cartorio', 'keys', 'keyring.json'), keys.keyring);
+    await commitAll(fx.dir, 'bootstrap keyring');
+    const result = await runVerify(fx.dir, ['--bootstrap-base-ref', 'main']);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+    assert.equal(result.json.code, 'BOOTSTRAP_FINGERPRINT_MISSING');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('f2-pr1: bootstrap-valid falha quando diff toca arquivo alem do keyring', async () => {
+  const fx = await tempBootstrapRepo('bootstrap-extra-file');
+  try {
+    const keys = makeKeys();
+    await mkdir(join(fx.dir, '.cartorio', 'keys'), { recursive: true });
+    await writeJson(join(fx.dir, '.cartorio', 'keys', 'keyring.json'), keys.keyring);
+    await writeFile(join(fx.dir, 'extra.txt'), 'nao pode\n');
+    await commitAll(fx.dir, 'bootstrap keyring plus extra');
+    const result = await runVerify(fx.dir, [
+      '--bootstrap-keyring-fingerprint',
+      keyringFingerprint(keys.keyring),
+      '--bootstrap-base-ref',
+      'main'
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+    assert.equal(result.json.code, 'BOOTSTRAP_DIFF_NOT_EXCLUSIVE');
   } finally {
     await fx.cleanup();
   }
@@ -69,6 +141,78 @@ test('passo10: receipt valido em caminho divergente do missaoId retorna fail', a
     assert.notEqual(result.status, 0);
     assert.equal(result.json.state, 'fail');
     assert.equal(result.json.details.receiptResults[0].code, 'RECEIPT_PATH_MISMATCH');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('f2-pr1: mais de um receipt de missao no PR retorna fail', async () => {
+  const fx = await tempRepo('receipt-count');
+  try {
+    await writeFile(join(fx.dir, 'entrega.txt'), 'conteudo multi receipt\n');
+    await commitAll(fx.dir, 'mission content');
+    const parentCommit = await head(fx.dir);
+    const tree = await computeTreeHashExcludingReceipts({ repo: fx.dir, commit: parentCommit, appDir: '' });
+    const artifact = await artifactAtCommit(fx.dir, parentCommit, 'entrega.txt');
+    const receipt = signReceipt(fx, {
+      parentCommit,
+      treeHashExcludingReceipts: tree.treeHashExcludingReceipts,
+      artefatos: [artifact]
+    });
+    await writeJson(join(fx.dir, '.cartorio', 'missoes', 'm-extra.receipt.json'), {
+      ...receipt,
+      missaoId: 'm-extra'
+    });
+    await writeJson(join(fx.dir, '.cartorio', 'missoes', 'm-remote.receipt.json'), receipt);
+    await commitAll(fx.dir, 'two mission receipts');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+    assert.equal(result.json.code, 'REMOTE_RECEIPT_COUNT_INVALID');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('f2-pr1: receipt historico nao conta como receipt novo do PR', async () => {
+  const fx = await tempRepo('receipt-historical');
+  try {
+    await createReceiptCommit(fx, {});
+    await git(fx.dir, ['mv', '.cartorio/missoes/m-remote.receipt.json', '.cartorio/missoes/m-old.receipt.json']);
+    await commitAll(fx.dir, 'preserve historical receipt fixture');
+    await createReceiptCommit(fx, {});
+    const result = await runVerify(fx.dir);
+    assert.equal(result.status, 0);
+    assert.equal(result.json.state, 'receipt-valid');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('f2-pr1: keyring alterado junto com receipt normal retorna fail', async () => {
+  const fx = await tempRepo('keyring-with-receipt');
+  try {
+    await writeFile(join(fx.dir, 'entrega.txt'), 'conteudo com keyring trocado\n');
+    await commitAll(fx.dir, 'mission content');
+    const parentCommit = await head(fx.dir);
+    const tree = await computeTreeHashExcludingReceipts({ repo: fx.dir, commit: parentCommit, appDir: '' });
+    const artifact = await artifactAtCommit(fx.dir, parentCommit, 'entrega.txt');
+    const receipt = signReceipt(fx, {
+      parentCommit,
+      treeHashExcludingReceipts: tree.treeHashExcludingReceipts,
+      artefatos: [artifact]
+    });
+    const extraKey = makeSingleKey('ledgerd');
+    await writeJson(join(fx.dir, '.cartorio', 'keys', 'keyring.json'), {
+      ...fx.keys.keyring,
+      [extraKey.keyId]: extraKey.entry
+    });
+    await writeJson(join(fx.dir, '.cartorio', 'missoes', `${receipt.missaoId}.receipt.json`), receipt);
+    await commitAll(fx.dir, 'receipt plus keyring change');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+    assert.equal(result.json.code, 'KEYRING_CHANGED_WITH_RECEIPT');
   } finally {
     await fx.cleanup();
   }
@@ -395,8 +539,8 @@ function makeManifest() {
   return manifest;
 }
 
-async function runVerify(repo) {
-  const result = await execFileAsync(process.execPath, [verifyBin, '--repo', repo], {
+async function runVerify(repo, extraArgs = []) {
+  const result = await execFileAsync(process.execPath, [verifyBin, '--repo', repo, ...extraArgs], {
     cwd: root
   }).then(
     (ok) => ({ status: 0, stdout: ok.stdout, stderr: ok.stderr }),
@@ -424,6 +568,10 @@ async function artifactAtWorktree(repo, path) {
 
 function sha256Buffer(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
+}
+
+function keyringFingerprint(keyring) {
+  return createHash('sha256').update(canonicalize(keyring), 'utf8').digest('hex');
 }
 
 async function writeJson(path, value) {

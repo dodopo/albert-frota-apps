@@ -117,7 +117,7 @@ test('gate passo5: missao CLI fino executa abrir, entregar, coletar e status via
       '--artefato',
       'package.json'
     ], { cwd: fixture.repoPath });
-    assert.equal(JSON.parse(entregar.cli.stdout).status.state, 'entregue');
+    assert.equal(JSON.parse(entregar.cli.stdout).status.state, 'delivered-pending-git');
     assert.ok(JSON.parse(entregar.cli.stdout).receipt);
 
     const coletar = await runWithLedgerd(t, [
@@ -141,6 +141,16 @@ test('gate passo5: missao CLI fino executa abrir, entregar, coletar e status via
     const statusJson = JSON.parse(status.cli.stdout);
     assert.equal(statusJson.status.state, 'verificada');
     assert.equal(statusJson.status.ledgerSeq, 3);
+
+    const listar = await runWithLedgerd(t, [
+      'listar',
+      '--limit',
+      '10'
+    ]);
+    const listarJson = JSON.parse(listar.cli.stdout);
+    assert.equal(listarJson.result.missions.length, 1);
+    assert.equal(listarJson.result.missions[0].missaoId, 'f1-passo5-cli');
+    assert.equal(listarJson.result.missions[0].runIdStatus, 'nao-verificada');
 
     const records = (await readFile(t.ledgerPath, 'utf8')).trim().split('\n');
     assert.equal(records.length, 3);

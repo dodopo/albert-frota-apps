@@ -3,7 +3,7 @@ import { InvalidStateError } from './protocol.js';
 export const STATES = {
   INEXISTENTE: 'inexistente',
   ABERTA: 'aberta',
-  ENTREGUE: 'entregue',
+  DELIVERED_PENDING_GIT: 'delivered-pending-git',
   VERIFICADA: 'verificada'
 };
 
@@ -12,15 +12,15 @@ export function nextState(currentState, eventType) {
   const transition = `${state}:${eventType}`;
   const next = {
     [`${STATES.INEXISTENTE}:missao.aberta`]: STATES.ABERTA,
-    [`${STATES.ABERTA}:missao.entregue`]: STATES.ENTREGUE,
-    [`${STATES.ENTREGUE}:missao.coletada`]: STATES.VERIFICADA
+    [`${STATES.ABERTA}:missao.entregue`]: STATES.DELIVERED_PENDING_GIT,
+    [`${STATES.DELIVERED_PENDING_GIT}:missao.coletada`]: STATES.VERIFICADA
   }[transition];
 
   if (!next) {
     throw new InvalidStateError('transicao de missao rejeitada pela maquina de estados', {
       currentState: state,
       eventType,
-      allowedFlow: 'abrir -> entregar -> coletar -> verificada'
+      allowedFlow: 'abrir -> entregar -> delivered-pending-git -> coletar -> verificada'
     });
   }
 

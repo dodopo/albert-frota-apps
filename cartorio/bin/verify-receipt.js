@@ -11,10 +11,12 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'
 const HELP = `verify-receipt ${packageJson.version}
 
 Uso:
-  verify-receipt [--repo <path>] [--commit <sha>] [--app-dir <path>] [--help] [--version]
+  verify-receipt [--repo <path>] [--commit <sha>] [--app-dir <path>]
+                 [--bootstrap-keyring-fingerprint <sha256>] [--bootstrap-base-ref <ref>]
+                 [--help] [--version]
 
 Valida o required check remoto do Cartorio usando apenas objetos do commit Git.
-Estados: receipt-valid | break-glass-valid | fail`;
+Estados: receipt-valid | break-glass-valid | bootstrap-valid | fail`;
 
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes('--help') || argv.includes('-h')) {
@@ -29,7 +31,9 @@ async function main(argv = process.argv.slice(2)) {
   const result = await verifyRemoteReceipt({
     repo: valueAfter(argv, '--repo') ?? process.cwd(),
     commit: valueAfter(argv, '--commit') ?? 'HEAD',
-    appDir: valueAfter(argv, '--app-dir') ?? null
+    appDir: valueAfter(argv, '--app-dir') ?? null,
+    expectedBootstrapKeyringFingerprint: valueAfter(argv, '--bootstrap-keyring-fingerprint') ?? undefined,
+    bootstrapBaseRef: valueAfter(argv, '--bootstrap-base-ref') ?? undefined
   });
   process.stdout.write(formatRemoteResult(result));
   return 0;

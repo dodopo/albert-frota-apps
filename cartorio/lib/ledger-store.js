@@ -83,6 +83,32 @@ export class LedgerStore {
     };
   }
 
+  async listMissions({ cursor = 0, limit = 25 } = {}) {
+    await this.recoverOrphans();
+    const loaded = await this.loadAndValidate();
+    const normalizedCursor = normalizeCursor(cursor);
+    const normalizedLimit = normalizeLimit(limit);
+    const rows = [];
+    for (const [missaoId, state] of loaded.missions.entries()) {
+      const lastEvent = findLastMissionEvent(loaded.records, missaoId);
+      if (!lastEvent || lastEvent.seq <= normalizedCursor) {
+        continue;
+      }
+      rows.push(redactMissionRow({ missaoId, state, lastEvent }));
+    }
+    rows.sort((left, right) => left.ledgerSeq - right.ledgerSeq || left.missaoId.localeCompare(right.missaoId, 'en', { sensitivity: 'variant' }));
+    const page = rows.slice(0, normalizedLimit);
+    const last = page.at(-1);
+    return {
+      ok: true,
+      head: loaded.head,
+      cursor: normalizedCursor,
+      limit: normalizedLimit,
+      nextCursor: last && rows.length > normalizedLimit ? last.ledgerSeq : null,
+      missions: page
+    };
+  }
+
   async append(input) {
     return withLock(this.lockPath, async () => {
       await this.recoverOrphans();
@@ -125,6 +151,9 @@ export class LedgerStore {
         actor: `uid:${normalized.actorUid}`,
         claimedActorUid: normalized.claimedActorUid,
         runId: normalized.runId,
+        runIdDeclarado: normalized.runId,
+        runIdVerificado: null,
+        runIdStatus: 'nao-verificada',
         ts: normalized.ts,
         stateBefore: currentState,
         stateAfter: resultingState,
@@ -474,12 +503,48 @@ function makeUnsignedReceipt(record) {
     missaoId: record.missaoId,
     ledgerSeq: record.seq,
     ledgerHeadHash: record.hash,
-    runId: record.runId,
+    runId: record.runIdDeclarado ?? record.runId,
+    runIdDeclarado: record.runIdDeclarado ?? record.runId,
+    runIdVerificado: record.runIdVerificado ?? null,
+    runIdStatus: record.runIdStatus ?? 'nao-verificada',
     ator: record.actor,
     actorUid: record.actorUid,
     codeManifestHash: record.codeManifestHash,
     buildId: record.buildId,
     signature: null
+  };
+}
+
+function normalizeCursor(value) {
+  const cursor = Number(value ?? 0);
+  if (!Number.isInteger(cursor) || cursor < 0) {
+    throw new InvalidStateError('cursor de listar invalido', { cursor: value });
+  }
+  return cursor;
+}
+
+function normalizeLimit(value) {
+  const limit = Number(value ?? 25);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new InvalidStateError('limit de listar invalido', { limit: value });
+  }
+  return Math.min(limit, 100);
+}
+
+function redactMissionRow({ missaoId, state, lastEvent }) {
+  return {
+    missaoId,
+    state,
+    runIdDeclarado: lastEvent.runIdDeclarado ?? lastEvent.runId,
+    runIdVerificado: lastEvent.runIdVerificado ?? null,
+    runIdStatus: lastEvent.runIdStatus ?? 'nao-verificada',
+    ledgerSeq: lastEvent.seq,
+    ledgerHeadHash: lastEvent.hash,
+    payloadHash: lastEvent.payloadHash,
+    actorUid: lastEvent.actorUid,
+    ts: lastEvent.ts,
+    commit: lastEvent.payload?.commit ?? null,
+    parentCommit: lastEvent.payload?.parentCommit ?? null
   };
 }
 
