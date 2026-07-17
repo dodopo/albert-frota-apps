@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { canonicalize, parseCanonicalJson } from '../lib/canonical-json.js';
 import { collectArtifactBlobs, normalizeArtifactPath } from '../lib/artifact-blobs.js';
 import { auditLocalRepository, formatAuditReport } from '../lib/audit.js';
-import { computeTreeHashExcludingReceipts } from '../lib/remote-verify.js';
+import { computeTreeHashExcludingReceipts, resolveCartorioAppDir } from '../lib/remote-verify.js';
 import {
   DaemonUnavailableError,
   errorResponse,
@@ -59,6 +59,7 @@ Opcoes:
   --cursor <ledgerSeq>        Cursor de listar
   --limit <n>                 Limite de listar, teto aplicado pelo daemon
   --commit <sha>              Commit Git base da entrega; default HEAD
+  --app-dir <path>            Escopo Git do app; default compartilhado com verify-receipt
   --artefato <path[:sha256]>  Pode repetir; sha declarado e conferido contra o blob git
   --expected-ledger-seq <n>   Cabeca esperada para anti-rollback
   --expected-ledger-head-hash <hash>
@@ -159,13 +160,19 @@ async function buildPayload(command, options) {
       cwd: process.cwd(),
       commit: options.commit
     });
+    const appDir = await resolveCartorioAppDir({
+      repo: resolved.repoRoot,
+      commit: resolved.commit,
+      appDir: options.appDir
+    });
     const tree = await computeTreeHashExcludingReceipts({
       repo: resolved.repoRoot,
       commit: resolved.commit,
-      appDir: ''
+      appDir
     });
     payload.commit = resolved.commit;
     payload.parentCommit = resolved.commit;
+    payload.appDir = appDir;
     payload.treeScope = tree.treeScope;
     payload.treeHashExcludingReceipts = tree.treeHashExcludingReceipts;
     payload.cartorioRepoRoot = resolved.repoRoot;
@@ -382,6 +389,9 @@ function parseOptions(args) {
         break;
       case '--commit':
         options.commit = next();
+        break;
+      case '--app-dir':
+        options.appDir = next();
         break;
       case '--artefato':
         options.artefato.push(next());

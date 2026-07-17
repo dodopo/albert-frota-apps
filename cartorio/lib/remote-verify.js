@@ -21,6 +21,8 @@ const KEYRING_PATH = '.cartorio/keys/keyring.json';
 const RECEIPT_DIR = '.cartorio/missoes';
 const BREAK_GLASS_DIR = '.cartorio/break-glass';
 const CODE_MANIFEST_PATH = 'build/uid-peer-helper.manifest.json';
+const CODE_SOURCE_PATH = 'native/uid-peer-helper.c';
+export const CARTORIO_APP_DIR = 'cartorio';
 export const TREE_SCOPE_V1 = 'cartorio.git-tree.v1:app-files-excluding-mission-receipts';
 const HEX_SHA256 = /^[0-9a-f]{64}$/;
 const HEX_COMMIT = /^[0-9a-f]{40,64}$/;
@@ -29,6 +31,8 @@ const BREAK_GLASS_REQUIRED = [
   'id',
   'motivo',
   'commit',
+  'parentCommit',
+  'treeHashExcludingReceipts',
   'artefatos',
   'autorizadoPor',
   'ts',
@@ -66,7 +70,7 @@ export async function verifyRemoteReceipt({
   const keyring = parentKeyring.value;
   validateKeyring(keyring);
   const manifest = await readJsonAtCommit(context, appPath(context, CODE_MANIFEST_PATH));
-  validateCodeManifest(manifest);
+  await validateCodeManifest(manifest, context);
 
   const changed = await changedFilesForCommit(context);
   const missionReceipts = changed.filter((entry) => isReceiptPath(unappPath(context, entry)));
@@ -92,6 +96,7 @@ export async function verifyRemoteReceipt({
         state: 'receipt-valid',
         commit: context.commit,
         parentCommit: context.parentCommit,
+        appDir: context.appDir,
         observedAt,
         receiptPath: path,
         missaoId: result.receipt.missaoId,
@@ -119,6 +124,8 @@ export async function verifyRemoteReceipt({
         exception: true,
         exceptionState: 'BREAK_GLASS_EXCEPTION',
         commit: context.commit,
+        parentCommit: context.parentCommit,
+        appDir: context.appDir,
         targetCommit: result.artifact.commit,
         observedAt,
         breakGlassPath: path,
@@ -137,10 +144,20 @@ export async function verifyRemoteReceipt({
     state: 'fail',
     commit: context.commit,
     parentCommit: context.parentCommit,
+    appDir: context.appDir,
     observedAt,
     receiptResults,
     breakGlassResults
   });
+}
+
+export async function resolveCartorioAppDir({ repo = process.cwd(), commit = 'HEAD', appDir = null } = {}) {
+  const root = (await git(['rev-parse', '--show-toplevel'], repo)).stdout.trim();
+  const prefix = (await git(['rev-parse', '--show-prefix'], repo)).stdout.trim().replace(/\/$/, '');
+  const resolvedCommit = (await git(['rev-parse', '--verify', `${commit}^{commit}`], root)).stdout.trim();
+  return appDir == null
+    ? defaultAppDirForCommit({ repo: root, commit: resolvedCommit, prefix })
+    : normalizeAppDir(appDir);
 }
 
 async function validateBootstrapAtCommit({ context, keyringPath, keyringAtHead, observedAt, expectedFingerprint, bootstrapBaseRef }) {
@@ -215,6 +232,21 @@ async function validateReceiptAtCommit({ context, path, receipt, keyring, manife
 async function validateBreakGlassAtCommit({ context, path, artifact, keyring, now }) {
   validateBreakGlassShape(artifact);
   await assertCommitObjectReachable(context, artifact.commit, 'BREAK_GLASS_TARGET_UNAVAILABLE');
+  if (artifact.parentCommit !== context.parentCommit || artifact.commit !== context.parentCommit) {
+    throw remoteError('BREAK_GLASS_CONTEXT_MISMATCH', 'break-glass nao corresponde ao parentCommit do commit verificado', {
+      artifactCommit: artifact.commit,
+      artifactParentCommit: artifact.parentCommit,
+      expectedParentCommit: context.parentCommit
+    });
+  }
+  const targetTree = await computeTreeHashExcludingReceipts({ ...context, commit: context.parentCommit });
+  if (artifact.treeHashExcludingReceipts !== targetTree.treeHashExcludingReceipts) {
+    throw remoteError('BREAK_GLASS_TREE_HASH_MISMATCH', 'treeHashExcludingReceipts do break-glass diverge do alvo verificado', {
+      artifactTreeHashExcludingReceipts: artifact.treeHashExcludingReceipts,
+      expectedTreeHashExcludingReceipts: targetTree.treeHashExcludingReceipts,
+      treeScope: targetTree.treeScope
+    });
+  }
   if (Date.parse(artifact.expiry) <= now.getTime()) {
     throw remoteError('BREAK_GLASS_EXPIRED', 'break-glass expirado', {
       expiry: artifact.expiry,
@@ -281,6 +313,8 @@ function validateBreakGlassShape(artifact) {
     assertNonEmptyString(artifact[field], field);
   }
   assertHex(artifact.commit, 'commit', HEX_COMMIT);
+  assertHex(artifact.parentCommit, 'parentCommit', HEX_COMMIT);
+  assertHex(artifact.treeHashExcludingReceipts, 'treeHashExcludingReceipts', HEX_SHA256);
   assertNonEmptyString(artifact.signature, 'signature');
   if (!Array.isArray(artifact.artefatos) || artifact.artefatos.length === 0) {
     throw remoteError('BREAK_GLASS_INVALID', 'artefatos obrigatorio e nao-vazio');
@@ -296,7 +330,7 @@ function validateBreakGlassShape(artifact) {
   assertIso(artifact.expiry, 'expiry');
 }
 
-function validateCodeManifest(manifest) {
+async function validateCodeManifest(manifest, context) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     throw remoteError('CODE_MANIFEST_INVALID', 'manifesto de codigo precisa ser objeto');
   }
@@ -304,12 +338,23 @@ function validateCodeManifest(manifest) {
     throw remoteError('CODE_MANIFEST_INVALID', 'schema do manifesto de codigo invalido', { schema: manifest.schema });
   }
   assertNonEmptyString(manifest.buildId, 'buildId');
+  assertHex(manifest.binarySha256, 'binarySha256', HEX_SHA256);
+  assertHex(manifest.sourceSha256, 'sourceSha256', HEX_SHA256);
+  assertNonEmptyString(manifest.primitive, 'primitive');
   assertHex(manifest.codeManifestHash, 'codeManifestHash', HEX_SHA256);
   const computed = computeCodeManifestHash(manifest);
   if (computed !== manifest.codeManifestHash) {
     throw remoteError('CODE_MANIFEST_HASH_MISMATCH', 'codeManifestHash diverge do manifesto versionado', {
       expected: computed,
       declared: manifest.codeManifestHash
+    });
+  }
+  const actualSource = await artifactHashAtCommit(context, CODE_SOURCE_PATH);
+  if (actualSource.blobSha256 !== manifest.sourceSha256) {
+    throw remoteError('CODE_MANIFEST_SOURCE_MISMATCH', 'sourceSha256 diverge do blob .c versionado', {
+      sourcePath: actualSource.path,
+      manifestSourceSha256: manifest.sourceSha256,
+      actualSourceSha256: actualSource.blobSha256
     });
   }
 }
@@ -383,8 +428,19 @@ async function gitContext(repo, commitish, appDirOption = null) {
   const commit = (await git(['rev-parse', '--verify', `${commitish}^{commit}`], root)).stdout.trim();
   const parentCommit = await firstParent(root, commit);
   await assertCommitObjectReachable({ repo: root }, parentCommit, 'GIT_PARENT_UNAVAILABLE');
-  const appDir = normalizeAppDir(appDirOption ?? prefix);
+  const appDir = appDirOption == null
+    ? await defaultAppDirForCommit({ repo: root, commit, prefix })
+    : normalizeAppDir(appDirOption);
   return { repo: root, commit, parentCommit, appDir };
+}
+
+async function defaultAppDirForCommit({ repo, commit, prefix }) {
+  const normalizedPrefix = normalizeAppDir(prefix);
+  if (normalizedPrefix) {
+    return normalizedPrefix;
+  }
+  const cartorioApp = await tryGit(['cat-file', '-e', `${commit}:${CARTORIO_APP_DIR}`], repo);
+  return cartorioApp.ok ? CARTORIO_APP_DIR : '';
 }
 
 async function firstParent(repo, commit) {
@@ -425,7 +481,7 @@ async function tryReadJsonAtCommit(context, path) {
 }
 
 async function changedFilesForCommit(context) {
-  const result = await git(['diff-tree', '--no-commit-id', '--name-only', '-r', context.commit], context.repo);
+  const result = await git(['diff', '--name-only', context.parentCommit, context.commit], context.repo);
   return result.stdout.trim().split('\n').filter(Boolean).sort();
 }
 

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLedgerStore } from '../lib/ledger-store.js';
 import { canonicalize, parseCanonicalJson } from '../lib/canonical-json.js';
-import { errorResponse, exitCodeForProtocolCode, okResponse, protocolVersion } from '../lib/protocol.js';
+import { errorResponse, exitCodeForProtocolCode, InvalidStateError, okResponse, protocolVersion } from '../lib/protocol.js';
 import {
   acceptAuthenticatedPeer,
   buildUidPeerHelper,
@@ -106,6 +106,7 @@ async function handlePeerRequest({ store, peer, manifest }) {
 
 async function executeCommand({ store, envelope, peer, manifest }) {
   const payload = envelope.payload && typeof envelope.payload === 'object' ? envelope.payload : {};
+  assertClientManifestIdentity({ envelope, payload, manifest });
   if (envelope.command === 'status') {
     return store.readMissionStatus(payload.missaoId ?? envelope.missaoId);
   }
@@ -136,6 +137,23 @@ async function executeCommand({ store, envelope, peer, manifest }) {
     codeManifestHash: manifest.codeManifestHash,
     buildId: manifest.buildId
   });
+}
+
+function assertClientManifestIdentity({ envelope, payload, manifest }) {
+  const clientCodeManifestHash = envelope.codeManifestHash ?? payload.codeManifestHash ?? null;
+  if (clientCodeManifestHash != null && clientCodeManifestHash !== manifest.codeManifestHash) {
+    throw new InvalidStateError('codeManifestHash do cliente diverge do manifesto verificado pelo ledgerd', {
+      clientCodeManifestHash,
+      verifiedCodeManifestHash: manifest.codeManifestHash
+    });
+  }
+  const clientBuildId = envelope.buildId ?? payload.buildId ?? null;
+  if (clientBuildId != null && clientBuildId !== manifest.buildId) {
+    throw new InvalidStateError('buildId do cliente diverge do manifesto verificado pelo ledgerd', {
+      clientBuildId,
+      verifiedBuildId: manifest.buildId
+    });
+  }
 }
 
 async function sendResponse(response) {

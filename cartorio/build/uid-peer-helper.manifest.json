@@ -1,21 +1,9 @@
 {
   "schema": "cartorio.uid-peer-helper.manifest/v1",
   "buildId": "uid-peer-helper:12caa5e844251bce",
-  "binaryPath": "/Users/openclaw/frota-apps/cartorio/build/uid-peer-helper",
   "binarySha256": "12caa5e844251bce15728f67a49c2908f92c9c28dc852593afff1a7fdbe90ab3",
-  "sourcePath": "/Users/openclaw/frota-apps/cartorio/native/uid-peer-helper.c",
   "sourceSha256": "76005b65f4796a83d8a70967448fc2200a41be1863417359b09bdb9071ba6cce",
   "primitive": "getpeereid(3)",
-  "buildCommand": [
-    "cc",
-    "-Wall",
-    "-Wextra",
-    "-Werror",
-    "-O2",
-    "-o",
-    "/Users/openclaw/frota-apps/cartorio/build/uid-peer-helper",
-    "/Users/openclaw/frota-apps/cartorio/native/uid-peer-helper.c"
-  ],
   "signature": null,
-  "codeManifestHash": "40a7f307fb823311f6271b57763d55175b58c1e547e43e17745f0b9b889e1588"
+  "codeManifestHash": "0d6d7c334f6fff5bf2dac31a540cd5d0dcf540123e70aa7a3c4cbd65507ee6fc"
 }

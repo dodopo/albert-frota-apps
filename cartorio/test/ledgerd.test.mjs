@@ -249,6 +249,7 @@ test('gate: escrita com UID efetivo divergente do ator alegado e rejeitada pelo 
       cwd: root,
       silent: true
     });
+    const ready = waitForLedgerdReady(child, () => ({ stdout, stderr }));
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8');
@@ -259,10 +260,7 @@ test('gate: escrita com UID efetivo divergente do ator alegado e rejeitada pelo 
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
     });
-    await new Promise((resolveReady, rejectReady) => {
-      child.once('message', resolveReady);
-      child.once('error', rejectReady);
-    });
+    await ready;
     const envelope = makeEnvelope({
       command: 'abrir',
       idempotencyKey: 'idem-open',
@@ -271,8 +269,9 @@ test('gate: escrita com UID efetivo divergente do ator alegado e rejeitada pelo 
       runId,
       payload: { missaoId: 'm-uid', assunto: 'abrir' }
     });
+    const closed = new Promise((resolveClose) => child.once('close', resolveClose));
     await send(socketPath, canonicalize(envelope));
-    const code = await new Promise((resolveClose) => child.once('close', resolveClose));
+    const code = await closed;
     assert.equal(code, 77);
     assert.equal(stderr, '');
     const response = JSON.parse(stdout);
@@ -294,6 +293,7 @@ test('gate: leitura com UID alegado divergente normaliza e nao escreve no ledger
       cwd: root,
       silent: true
     });
+    const ready = waitForLedgerdReady(child, () => ({ stdout, stderr }));
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8');
@@ -304,24 +304,115 @@ test('gate: leitura com UID alegado divergente normaliza e nao escreve no ledger
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
     });
-    await new Promise((resolveReady, rejectReady) => {
-      child.once('message', resolveReady);
-      child.once('error', rejectReady);
-    });
+    await ready;
     const envelope = makeEnvelope({
       command: 'status',
       actorUid: uid + 1,
       actorGid: gid,
       payload: { missaoId: 'm-uid-read' }
     });
+    const closed = new Promise((resolveClose) => child.once('close', resolveClose));
     await send(socketPath, canonicalize(envelope));
-    const code = await new Promise((resolveClose) => child.once('close', resolveClose));
+    const code = await closed;
     assert.equal(code, 0);
     assert.equal(stderr, '');
     const response = JSON.parse(stdout);
     assert.equal(response.ok, true);
     assert.equal(response.peer.uid, uid);
     assert.equal(response.result.state, 'inexistente');
+    await assert.rejects(() => stat(t.ledgerPath), /ENOENT/);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test('f2: ledgerd rejeita codeManifestHash e buildId divergentes do manifesto verificado', async () => {
+  const t = await tempCase('idm');
+  try {
+    const socketPath = join(t.dir, 'ledgerd.sock');
+    const child = fork(resolve(root, 'bin/ledgerd.js'), ['--serve-once', socketPath, '--ledger', t.ledgerPath], {
+      cwd: root,
+      silent: true
+    });
+    const ready = waitForLedgerdReady(child, () => ({ stdout, stderr }));
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    await ready;
+    const envelope = makeEnvelope({
+      command: 'abrir',
+      idempotencyKey: 'idem-open',
+      actorUid: uid,
+      actorGid: gid,
+      runId,
+      payload: {
+        missaoId: 'm-manifest-mismatch',
+        codeManifestHash: '0'.repeat(64),
+        buildId: 'uid-peer-helper:forged'
+      }
+    });
+    const closed = new Promise((resolveClose) => child.once('close', resolveClose));
+    await send(socketPath, canonicalize(envelope));
+    const code = await closed;
+    assert.equal(code, 65);
+    assert.equal(stderr, '');
+    const response = JSON.parse(stdout);
+    assert.equal(response.ok, false);
+    assert.equal(response.code, 'INVALID_STATE');
+    assert.match(response.message, /codeManifestHash/);
+    await assert.rejects(() => stat(t.ledgerPath), /ENOENT/);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test('f2: ledgerd rejeita buildId divergente mesmo sem codeManifestHash do cliente', async () => {
+  const t = await tempCase('bid');
+  try {
+    const socketPath = join(t.dir, 'ledgerd.sock');
+    const child = fork(resolve(root, 'bin/ledgerd.js'), ['--serve-once', socketPath, '--ledger', t.ledgerPath], {
+      cwd: root,
+      silent: true
+    });
+    const ready = waitForLedgerdReady(child, () => ({ stdout, stderr }));
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    await ready;
+    const envelope = makeEnvelope({
+      command: 'abrir',
+      idempotencyKey: 'idem-open',
+      actorUid: uid,
+      actorGid: gid,
+      runId,
+      payload: {
+        missaoId: 'm-buildid-mismatch',
+        buildId: 'uid-peer-helper:forged'
+      }
+    });
+    const closed = new Promise((resolveClose) => child.once('close', resolveClose));
+    await send(socketPath, canonicalize(envelope));
+    const code = await closed;
+    assert.equal(code, 65);
+    assert.equal(stderr, '');
+    const response = JSON.parse(stdout);
+    assert.equal(response.ok, false);
+    assert.equal(response.code, 'INVALID_STATE');
+    assert.match(response.message, /buildId/);
     await assert.rejects(() => stat(t.ledgerPath), /ENOENT/);
   } finally {
     await t.cleanup();
@@ -419,5 +510,16 @@ async function send(socketPath, payload) {
       socket.end(typeof payload === 'string' ? payload : `${JSON.stringify(payload)}\n`);
     });
     socket.once('close', resolveSend);
+  });
+}
+
+function waitForLedgerdReady(child, output) {
+  return new Promise((resolveReady, rejectReady) => {
+    child.once('message', resolveReady);
+    child.once('error', rejectReady);
+    child.once('close', (code, signal) => {
+      const { stdout, stderr } = output();
+      rejectReady(new Error(`ledgerd saiu antes do ready code=${code} signal=${signal ?? 'none'} stdout=${stdout} stderr=${stderr}`));
+    });
   });
 }
