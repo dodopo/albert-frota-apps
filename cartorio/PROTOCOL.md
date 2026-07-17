@@ -10,8 +10,13 @@ canonicalizacao e crypto fica fora deste esqueleto.
 - O componente que aceita a conexao precisa autenticar a credencial do kernel do peer e congelar a
   identidade no inicio da conexao.
 - O cliente recebe resposta por um UDS efemero em `/tmp/cartorio-missao-*`, dentro de diretorio
-  `0711` com nome de socket aleatorio. Em macOS, a fronteira pratica e o caminho imprevisivel em
-  diretorio nao-listavel; o modo do arquivo de socket nao e a fronteira de leitura.
+  `0711` com nome de socket aleatorio. Em macOS/Darwin, `connect(2)` em socket UNIX tambem exige
+  permissao de escrita no arquivo do socket; isso foi comprovado em producao por `connect EACCES
+  /tmp/cartorio-missao-pa5TZp/response-d08e1844006d54a7b82e84f5a01fe470.sock` quando o daemon
+  `cartorio` tentou responder a um cliente de UID diferente. Por isso o cliente ajusta o socket
+  efemero para `0666` depois de `listen()` e antes de enviar o envelope ao `ledgerd`. A fronteira de
+  sigilo continua sendo o diretorio nao-listavel `0711`, o basename imprevisivel de 128 bits, a janela
+  curta, a remocao no `finally` e a regra operacional de primeiro-conecta-ganha.
 
 ## Envelope
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { fork, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import net from 'node:net';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -350,6 +351,68 @@ test('gate producao: resposta do ledgerd nao depende do TMPDIR privado do client
     await t.cleanup();
   }
 });
+
+test('gate producao: socket de resposta fica 0666 depois do listen e antes do envelope', async () => {
+  const t = await tempCase('resp-mode');
+  let fakeLedgerd;
+  try {
+    fakeLedgerd = net.createServer((socket) => {
+      let data = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk) => {
+        data += chunk;
+      });
+      socket.once('end', async () => {
+        try {
+          const envelope = JSON.parse(data);
+          const mode = (await stat(envelope.responseSocket)).mode & 0o777;
+          assert.equal(mode, 0o666);
+          const response = {
+            ok: true,
+            command: envelope.command,
+            result: {
+              missaoId: envelope.payload.missaoId,
+              state: 'inexistente',
+              head: { ledgerSeq: 0, ledgerHeadHash: '0'.repeat(64) }
+            }
+          };
+          socket.end();
+          await sendResponse(envelope.responseSocket, canonicalize(response));
+        } catch (error) {
+          socket.destroy(error);
+        }
+      });
+    });
+    await new Promise((resolveListen, rejectListen) => {
+      fakeLedgerd.once('error', rejectListen);
+      fakeLedgerd.listen(t.socketPath, resolveListen);
+    });
+
+    const result = await execFileAsync(process.execPath, [
+      resolve(root, 'bin/missao.js'),
+      'status',
+      '--missao-id',
+      'response-mode',
+      '--socket',
+      t.socketPath
+    ], { cwd: root });
+    assert.equal(JSON.parse(result.stdout).status.state, 'inexistente');
+  } finally {
+    await new Promise((resolveClose) => fakeLedgerd?.close(resolveClose) ?? resolveClose());
+    await t.cleanup();
+  }
+});
+
+async function sendResponse(socketPath, payload) {
+  await new Promise((resolveSend, rejectSend) => {
+    const socket = net.createConnection(socketPath);
+    socket.once('error', rejectSend);
+    socket.once('connect', () => {
+      socket.end(payload);
+    });
+    socket.once('close', resolveSend);
+  });
+}
 
 test('gate passo5: missao self-check fail-closed sai nao-zero para UID_PEER_HELPER_UNTRUSTED', async () => {
   const t = await tempCase('self-check');

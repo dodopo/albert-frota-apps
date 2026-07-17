@@ -190,6 +190,7 @@ async function requestLedgerd(socketPath, envelope) {
     server = responsePromise.server;
     cancelResponse = responsePromise.cancel;
     await responsePromise.ready;
+    await chmod(responseSocket, 0o666);
     const request = { ...envelope, responseSocket };
     await sendRequest(socketPath, canonicalize(request));
     const response = await responsePromise.result;
