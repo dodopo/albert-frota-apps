@@ -1,9 +1,6 @@
 name: missao-receipt
-
 on:
   pull_request:
-  push:
-
 jobs:
   missao-receipt:
     name: missao-receipt
@@ -16,14 +13,31 @@ jobs:
         with:
           fetch-depth: 0
       - name: Fetch main for bootstrap base
-        run: git fetch --no-tags origin main:refs/remotes/origin/main || true
+        run: |
+          git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+          git rev-parse --verify refs/remotes/origin/main^{commit}
+      - name: Verify bootstrap secret is present
+        env:
+          CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT: ${{ secrets.CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT }}
+        run: test -n "$CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT"
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Extract pinned judge from base
+        run: |
+          rm -rf _judge
+          mkdir -p _judge
+          git archive origin/main cartorio | tar -x -C _judge
       - name: Verify mission receipt
         env:
           CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT: ${{ secrets.CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT }}
           CARTORIO_BOOTSTRAP_BASE_REF: origin/main
           RECEIPT_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: node cartorio/bin/verify-receipt.js --app-dir cartorio --commit "$RECEIPT_COMMIT"
+        run: |
+          node _judge/cartorio/bin/verify-receipt.js \
+            --repo "$GITHUB_WORKSPACE" \
+            --commit "$RECEIPT_COMMIT" \
+            --app-dir cartorio \
+            --bootstrap-keyring-fingerprint "$CARTORIO_BOOTSTRAP_KEYRING_FINGERPRINT" \
+            --bootstrap-base-ref "$CARTORIO_BOOTSTRAP_BASE_REF"
