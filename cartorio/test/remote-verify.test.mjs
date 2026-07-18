@@ -14,14 +14,15 @@ import {
   rawPublicKeyFromPrivateKey,
   signBytes
 } from '../lib/keyring.js';
-import { computeTreeHashExcludingReceipts, TREE_SCOPE_V1 } from '../lib/remote-verify.js';
+import { computeTreeHashExcludingReceipts, resolveCartorioAppDir, TREE_SCOPE_V1 } from '../lib/remote-verify.js';
 import { computeCodeManifestHash } from '../lib/uid-peer.js';
 
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const verifyBin = join(root, 'bin', 'verify-receipt.js');
 const ts = '2026-07-16T17:00:00.000Z';
-const runId = 'agent:neo:subagent:00000000-0000-4000-8000-000000000009';
+const runId = 'agent:neo:subagent:000000000009';
+const helperSource = 'int main(void) { return 0; }\n';
 let receiptCounter = 0;
 
 async function tempRepo(name) {
@@ -33,14 +34,44 @@ async function tempRepo(name) {
   await mkdir(join(dir, '.cartorio', 'missoes'), { recursive: true });
   await mkdir(join(dir, '.cartorio', 'break-glass'), { recursive: true });
   await mkdir(join(dir, 'build'), { recursive: true });
+  await mkdir(join(dir, 'native'), { recursive: true });
   await writeFile(join(dir, 'package.json'), '{"name":"fixture"}\n');
   await writeFile(join(dir, 'entrega.txt'), 'base\n');
+  await writeFile(join(dir, 'native', 'uid-peer-helper.c'), helperSource);
 
   const keys = makeKeys();
   await writeJson(join(dir, '.cartorio', 'keys', 'keyring.json'), keys.keyring);
   const manifest = makeManifest();
   await writeJson(join(dir, 'build', 'uid-peer-helper.manifest.json'), manifest);
   await commitAll(dir, 'base');
+  return {
+    dir,
+    keys,
+    manifest,
+    cleanup: () => rm(dir, { recursive: true, force: true })
+  };
+}
+
+async function tempCartorioRepo(name) {
+  const dir = await mkdtemp(join(tmpdir(), `cartorio-remote-${name}-`));
+  const appRoot = join(dir, 'cartorio');
+  await git(dir, ['init', '-b', 'main']);
+  await git(dir, ['config', 'user.email', 'neo@example.invalid']);
+  await git(dir, ['config', 'user.name', 'Neo Test']);
+  await mkdir(join(appRoot, '.cartorio', 'keys'), { recursive: true });
+  await mkdir(join(appRoot, '.cartorio', 'missoes'), { recursive: true });
+  await mkdir(join(appRoot, '.cartorio', 'break-glass'), { recursive: true });
+  await mkdir(join(appRoot, 'build'), { recursive: true });
+  await mkdir(join(appRoot, 'native'), { recursive: true });
+  await writeFile(join(appRoot, 'package.json'), '{"name":"fixture-cartorio"}\n');
+  await writeFile(join(appRoot, 'entrega.txt'), 'base\n');
+  await writeFile(join(appRoot, 'native', 'uid-peer-helper.c'), helperSource);
+
+  const keys = makeKeys();
+  await writeJson(join(appRoot, '.cartorio', 'keys', 'keyring.json'), keys.keyring);
+  const manifest = makeManifest();
+  await writeJson(join(appRoot, 'build', 'uid-peer-helper.manifest.json'), manifest);
+  await commitAll(dir, 'base cartorio app');
   return {
     dir,
     keys,
@@ -323,6 +354,103 @@ test('passo9: codeManifestHash divergente retorna fail', async () => {
   }
 });
 
+test('f2: manifesto falha quando sourceSha256 nao bate com blob .c commitado', async () => {
+  const fx = await tempRepo('manifest-source');
+  try {
+    await writeFile(join(fx.dir, 'entrega.txt'), 'conteudo com source divergente\n');
+    await commitAll(fx.dir, 'mission content');
+    const parentCommit = await head(fx.dir);
+    const tree = await computeTreeHashExcludingReceipts({ repo: fx.dir, commit: parentCommit, appDir: '' });
+    const artifact = await artifactAtCommit(fx.dir, parentCommit, 'entrega.txt');
+    const manifest = {
+      ...fx.manifest,
+      sourceSha256: '4'.repeat(64)
+    };
+    manifest.codeManifestHash = computeCodeManifestHash(manifest);
+    const receipt = signReceipt(fx, {
+      parentCommit,
+      treeHashExcludingReceipts: tree.treeHashExcludingReceipts,
+      artefatos: [artifact],
+      codeManifestHash: manifest.codeManifestHash
+    });
+    await writeJson(join(fx.dir, 'build', 'uid-peer-helper.manifest.json'), manifest);
+    await writeJson(join(fx.dir, '.cartorio', 'missoes', `${receipt.missaoId}.receipt.json`), receipt);
+    await commitAll(fx.dir, 'receipt with forged source manifest');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+    assert.equal(result.json.code, 'CODE_MANIFEST_SOURCE_MISMATCH');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('f2: appDir, treeHashExcludingReceipts e codeManifestHash batem entre produtor e verificador', async () => {
+  const fx = await tempCartorioRepo('appdir-invariant');
+  try {
+    await writeFile(join(fx.dir, 'cartorio', 'entrega.txt'), 'conteudo no app cartorio\n');
+    await commitAll(fx.dir, 'mission content in app');
+    const parentCommit = await head(fx.dir);
+    const producerAppDir = await resolveCartorioAppDir({ repo: fx.dir, commit: parentCommit });
+    const producerTree = await computeTreeHashExcludingReceipts({ repo: fx.dir, commit: parentCommit, appDir: producerAppDir });
+    const artifact = await artifactAtCommit(fx.dir, parentCommit, 'cartorio/entrega.txt');
+    const receipt = signReceipt(fx, {
+      parentCommit,
+      treeHashExcludingReceipts: producerTree.treeHashExcludingReceipts,
+      artefatos: [artifact]
+    });
+    await writeJson(join(fx.dir, 'cartorio', '.cartorio', 'missoes', `${receipt.missaoId}.receipt.json`), receipt);
+    await commitAll(fx.dir, 'mission receipt in app');
+
+    const defaultVerify = await runVerify(fx.dir);
+    const explicitVerify = await runVerify(fx.dir, ['--app-dir', 'cartorio']);
+    assert.equal(producerAppDir, 'cartorio');
+    assert.equal(defaultVerify.status, 0);
+    assert.equal(explicitVerify.status, 0);
+    assert.equal(defaultVerify.json.appDir, producerAppDir);
+    assert.equal(explicitVerify.json.appDir, producerAppDir);
+    assert.equal(defaultVerify.json.treeHashExcludingReceipts, producerTree.treeHashExcludingReceipts);
+    assert.equal(explicitVerify.json.treeHashExcludingReceipts, producerTree.treeHashExcludingReceipts);
+    assert.equal(defaultVerify.json.codeManifestHash, computeCodeManifestHash(fx.manifest));
+    assert.equal(explicitVerify.json.codeManifestHash, computeCodeManifestHash(fx.manifest));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('f2: receipt em merge commit valida contra primeiro pai e arvore efetiva sem receipts', async () => {
+  const fx = await tempRepo('merge-commit');
+  try {
+    await writeFile(join(fx.dir, 'entrega.txt'), 'conteudo antes do merge\n');
+    await commitAll(fx.dir, 'mission content');
+    const parentCommit = await head(fx.dir);
+    await git(fx.dir, ['switch', '-c', 'side']);
+    await writeFile(join(fx.dir, 'side.txt'), 'conteudo do segundo pai\n');
+    await commitAll(fx.dir, 'side content');
+    await git(fx.dir, ['switch', 'main']);
+    await git(fx.dir, ['merge', '--no-ff', 'side', '-m', 'merge side without receipt']);
+    const unsignedMerge = await head(fx.dir);
+    const mergeTree = await computeTreeHashExcludingReceipts({ repo: fx.dir, commit: unsignedMerge, appDir: '' });
+    const artifact = await artifactAtCommit(fx.dir, unsignedMerge, 'entrega.txt');
+    const receipt = signReceipt(fx, {
+      parentCommit,
+      treeHashExcludingReceipts: mergeTree.treeHashExcludingReceipts,
+      artefatos: [artifact]
+    });
+    await writeJson(join(fx.dir, '.cartorio', 'missoes', `${receipt.missaoId}.receipt.json`), receipt);
+    await git(fx.dir, ['add', '.cartorio/missoes']);
+    await git(fx.dir, ['commit', '--amend', '--no-edit']);
+
+    const result = await runVerify(fx.dir);
+    assert.equal(result.status, 0);
+    assert.equal(result.json.state, 'receipt-valid');
+    assert.equal(result.json.parentCommit, parentCommit);
+    assert.equal(result.json.treeHashExcludingReceipts, mergeTree.treeHashExcludingReceipts);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('passo9: receipt replicado em commit com outro pai retorna fail', async () => {
   const fx = await tempRepo('replay');
   try {
@@ -370,6 +498,23 @@ test('passo9: break-glass com role errada retorna fail', async () => {
     const result = await runVerify(fx.dir);
     assert.notEqual(result.status, 0);
     assert.equal(result.json.state, 'fail');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('f2: break-glass replayado fora do parentCommit e treeHash assinados retorna fail', async () => {
+  const fx = await tempRepo('breakglass-context-replay');
+  try {
+    const target = await createTargetCommit(fx, 'target replay context');
+    await writeBreakGlass(fx, { id: 'bg-context', targetCommit: target, expiry: '2099-01-01T00:00:00.000Z' });
+    await commitAll(fx.dir, 'break-glass original');
+    await writeFile(join(fx.dir, 'entrega.txt'), 'outro contexto sem nova assinatura\n');
+    await commitAll(fx.dir, 'replay break-glass in another context');
+    const result = await runVerify(fx.dir);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.state, 'fail');
+    assert.equal(result.json.details.breakGlassResults[0].code, 'BREAK_GLASS_CONTEXT_MISMATCH');
   } finally {
     await fx.cleanup();
   }
@@ -476,10 +621,13 @@ function signReceipt(fx, overrides = {}) {
 
 async function writeBreakGlass(fx, { id, targetCommit, expiry, signer = fx.keys.breakGlass }) {
   const artifact = await artifactAtCommit(fx.dir, targetCommit, 'entrega.txt');
+  const tree = await computeTreeHashExcludingReceipts({ repo: fx.dir, commit: targetCommit, appDir: '' });
   const material = {
     id,
     motivo: 'emergencia testavel',
     commit: targetCommit,
+    parentCommit: targetCommit,
+    treeHashExcludingReceipts: tree.treeHashExcludingReceipts,
     artefatos: [artifact],
     autorizadoPor: 'Dudous',
     ts,
@@ -527,12 +675,9 @@ function makeManifest() {
   const manifest = {
     schema: 'cartorio.uid-peer-helper.manifest/v1',
     buildId: 'uid-peer-helper:test',
-    binaryPath: 'build/uid-peer-helper',
     binarySha256: '2'.repeat(64),
-    sourcePath: 'native/uid-peer-helper.c',
-    sourceSha256: '3'.repeat(64),
+    sourceSha256: sha256Buffer(Buffer.from(helperSource)),
     primitive: 'getpeereid(3)',
-    buildCommand: ['cc', '-o', 'build/uid-peer-helper', 'native/uid-peer-helper.c'],
     signature: null
   };
   manifest.codeManifestHash = computeCodeManifestHash(manifest);

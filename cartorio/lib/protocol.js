@@ -1,6 +1,6 @@
 export const protocolVersion = 'cartorio-cli-ledgerd/v0.3-uds';
 
-export const SUPPORTED_COMMANDS = ['abrir', 'entregar', 'coletar', 'status', 'listar', 'audit'];
+export const SUPPORTED_COMMANDS = ['abrir', 'entregar', 'coletar', 'status', 'listar', 'audit', 'receipt'];
 
 export const EVENT_TYPES = {
   MISSAO_ABERTA: 'missao.aberta',

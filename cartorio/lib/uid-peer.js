@@ -49,12 +49,9 @@ export async function buildUidPeerHelper({ cc = 'cc', force = false, manifestPat
   const manifest = {
     schema: 'cartorio.uid-peer-helper.manifest/v1',
     buildId: `uid-peer-helper:${binaryHash.slice(0, 16)}`,
-    binaryPath: uidPeerHelperBinary,
     binarySha256: binaryHash,
-    sourcePath: uidPeerHelperSource,
     sourceSha256: sourceHash,
     primitive: 'getpeereid(3)',
-    buildCommand: [cc, ...args],
     signature: null
   };
   manifest.codeManifestHash = computeCodeManifestHash(manifest);
@@ -88,6 +85,7 @@ export async function verifyUidPeerHelperManifest({
       { code: 'UID_PEER_MANIFEST_INVALID', manifestPath, manifest }
     );
   }
+  assertManifestString(manifest.binarySha256, 'binarySha256', manifestPath);
 
   try {
     const st = await stat(helperPath);
@@ -128,10 +126,22 @@ export async function verifyUidPeerHelperManifest({
 }
 
 export function computeCodeManifestHash(manifest) {
-  const material = { ...manifest };
-  delete material.codeManifestHash;
-  delete material.signature;
+  const material = {
+    schema: manifest.schema,
+    binarySha256: manifest.binarySha256,
+    sourceSha256: manifest.sourceSha256,
+    primitive: manifest.primitive
+  };
   return createHash('sha256').update(canonicalize(material), 'utf8').digest('hex');
+}
+
+function assertManifestString(manifestValue, field, manifestPath) {
+  if (typeof manifestValue !== 'string' || manifestValue.length === 0) {
+    throw Object.assign(
+      new Error(`uid-peer helper manifest field missing or invalid: ${field}`),
+      { code: 'UID_PEER_MANIFEST_INVALID', manifestPath, field }
+    );
+  }
 }
 
 export async function acceptAuthenticatedPeer({

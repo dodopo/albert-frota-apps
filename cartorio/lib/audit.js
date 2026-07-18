@@ -25,7 +25,7 @@ const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_LEDGER = '/Users/cartorio/ledger/missoes.jsonl';
 const DEFAULT_SOCKET = '/Users/cartorio/run/ledgerd.sock';
 const DEFAULT_SESSIONS_ROOT = join(appRoot, 'fixtures', 'openclaw-agents');
-const AGENT_RUN_ID = /^agent:([^:]+):subagent:([A-Za-z0-9._-]+)$/;
+const AGENT_RUN_ID = /^agent:([^:]+):subagent:([0-9a-fA-F-]{12,})$/;
 const HUMAN_RUN_ID = /^human:[^:]+$/;
 const MANUAL_RUN_ID = /^manual:.+$/;
 const HEX_64 = /^[0-9a-f]{64}$/;
@@ -360,11 +360,14 @@ async function auditReceipts(ctx) {
       const receipt = await readReceipt(receiptPath);
       await verifyReceipt(receipt, {
         keyringPath: ctx.config.keyringPath,
-        currentHead: ctx.head,
+        currentHead: delivery ? {
+          ledgerSeq: delivery.seq,
+          ledgerHeadHash: delivery.hash
+        } : ctx.head,
         expectedParentCommit: delivery?.payload?.parentCommit ?? record.payload?.parentCommit,
         expectedTreeScope: delivery?.payload?.treeScope ?? record.payload?.treeScope,
         expectedTreeHashExcludingReceipts: delivery?.payload?.treeHashExcludingReceipts ?? record.payload?.treeHashExcludingReceipts,
-        expectedArtifacts: delivery?.payload?.artefatos ?? record.payload?.artefatos ?? []
+        expectedArtifacts: normalizeReceiptArtifacts(delivery?.payload?.artefatos ?? record.payload?.artefatos ?? [])
       });
       ctx.receipts.push({ missaoId: record.missaoId, status: 'valid', path: receiptPath });
     } catch (error) {
@@ -377,6 +380,13 @@ async function auditReceipts(ctx) {
       });
     }
   }
+}
+
+function normalizeReceiptArtifacts(artifacts) {
+  return artifacts.map((artifact) => ({
+    path: artifact.path,
+    blobSha256: artifact.blobSha256
+  }));
 }
 
 async function auditRunIds(ctx) {

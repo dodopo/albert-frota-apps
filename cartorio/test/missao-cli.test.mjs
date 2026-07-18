@@ -13,7 +13,7 @@ import { uidPeerHelperBinary } from '../lib/uid-peer.js';
 
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const runId = 'agent:neo:subagent:4bbb60d3-b421-41f5-9856-8aa5a4f547cc';
+const runId = 'agent:neo:subagent:4bbb60d3b42141f598568aa5a4f547cc';
 
 async function tempCase(name) {
   const dir = await mkdtemp(join(tmpdir(), `cartorio-missao-cli-${name}-`));
@@ -117,8 +117,22 @@ test('gate passo5: missao CLI fino executa abrir, entregar, coletar e status via
       '--artefato',
       'package.json'
     ], { cwd: fixture.repoPath });
-    assert.equal(JSON.parse(entregar.cli.stdout).status.state, 'delivered-pending-git');
-    assert.ok(JSON.parse(entregar.cli.stdout).receipt);
+    const entregaJson = JSON.parse(entregar.cli.stdout);
+    assert.equal(entregaJson.status.state, 'delivered-pending-git');
+    assert.ok(entregaJson.receipt.signature);
+    assert.match(entregaJson.result.receiptPath, /\/\.cartorio\/missoes\/f1-passo5-cli\.receipt\.json$/);
+    const materializedReceipt = JSON.parse(await readFile(entregaJson.result.receiptPath, 'utf8'));
+    assert.deepEqual(materializedReceipt, entregaJson.receipt);
+
+    const receipt = await runWithLedgerd(t, [
+      'receipt',
+      '--missao-id',
+      'f1-passo5-cli'
+    ], { cwd: fixture.repoPath });
+    const receiptJson = JSON.parse(receipt.cli.stdout);
+    assert.deepEqual(receiptJson.receipt, entregaJson.receipt);
+    assert.equal(receiptJson.status, null);
+    assert.equal(receiptJson.result.receiptPath, entregaJson.result.receiptPath);
 
     const coletar = await runWithLedgerd(t, [
       'coletar',

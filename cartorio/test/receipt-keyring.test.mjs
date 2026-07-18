@@ -22,7 +22,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ts = '2026-07-16T16:30:00.000Z';
 const parentCommit = 'a'.repeat(40);
 const artifact = { path: 'package.json', blobSha256: 'b'.repeat(64) };
-const runId = 'agent:neo:subagent:receipt-keyring-gate-000000000001';
+const runId = 'agent:neo:subagent:000000000001';
 const treeScope = 'cartorio.git-tree.v1:app-files-excluding-mission-receipts';
 const treeHashExcludingReceipts = 'e'.repeat(64);
 
@@ -75,7 +75,7 @@ async function signedFixture(name, overrides = {}) {
   return { t, signed };
 }
 
-test('gate passo7: ledgerd emite receipt assinado verificavel pela pub do keyring', async () => {
+test('gate passo7: ledgerd emite receipt assinado na entrega e coletar rederiva sem gravar arquivo', async () => {
   const t = await tempCase('ledgerd-happy');
   try {
     const env = {
@@ -97,13 +97,15 @@ test('gate passo7: ledgerd emite receipt assinado verificavel pela pub do keyrin
     };
     const coletar = { ...base, command: 'coletar', missaoId: 'm-ledgerd', idempotencyKey: 'collect', payload: { missaoId: 'm-ledgerd' } };
     await execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', JSON.stringify(abrir), '--ledger', t.ledgerPath], { cwd: root, env });
-    await execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', JSON.stringify(entregar), '--ledger', t.ledgerPath], { cwd: root, env });
-    const result = await execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', JSON.stringify(coletar), '--ledger', t.ledgerPath], { cwd: root, env });
-    const parsed = JSON.parse(result.stdout);
-    const receipt = JSON.parse(await readFile(join(t.receiptDir, 'm-ledgerd.receipt.json'), 'utf8'));
+    const deliverResult = await execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', JSON.stringify(entregar), '--ledger', t.ledgerPath], { cwd: root, env });
+    const collectResult = await execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', JSON.stringify(coletar), '--ledger', t.ledgerPath], { cwd: root, env });
+    const deliverParsed = JSON.parse(deliverResult.stdout);
+    const collectParsed = JSON.parse(collectResult.stdout);
+    const receipt = deliverParsed.receipt;
 
-    assert.equal(parsed.receipt.signature, receipt.signature);
+    assert.equal(collectParsed.receipt.signature, receipt.signature);
     assert.equal(receipt.keyId, Object.keys(await loadKeyring(t.keyringPath))[0]);
+    await assert.rejects(() => readFile(join(t.receiptDir, 'm-ledgerd.receipt.json'), 'utf8'), /ENOENT/);
     await verifyReceipt(receipt, {
       keyringPath: t.keyringPath,
       currentHead: {

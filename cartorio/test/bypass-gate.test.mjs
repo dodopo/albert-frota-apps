@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -19,7 +19,8 @@ import { computeCodeManifestHash } from '../lib/uid-peer.js';
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const uid = process.getuid?.() ?? 501;
-const runId = 'agent:neo:subagent:bypass-00000000-0000-4000-8000-000000000010';
+const runId = 'agent:neo:subagent:000000000010';
+const helperSource = 'int main(void) { return 0; }\n';
 
 test('gate passo10: hook local recusa commit quando existe missao aberta', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cartorio-bypass-hook-'));
@@ -60,7 +61,9 @@ test('gate passo10: git commit --no-verify sem receipt ainda falha no required c
     await git(repo, ['config', 'user.name', 'Neo Test']);
     await mkdir(join(repo, '.cartorio', 'keys'), { recursive: true });
     await mkdir(join(repo, 'build'), { recursive: true });
+    await mkdir(join(repo, 'native'), { recursive: true });
     await writeJson(join(repo, '.cartorio', 'keys', 'keyring.json'), makeKeyring());
+    await writeFile(join(repo, 'native', 'uid-peer-helper.c'), helperSource, 'utf8');
     await writeJson(join(repo, 'build', 'uid-peer-helper.manifest.json'), makeManifest());
     await writeFile(join(repo, 'README.md'), 'base\n', 'utf8');
     await git(repo, ['add', '-A']);
@@ -105,12 +108,9 @@ function makeManifest() {
   const manifest = {
     schema: 'cartorio.uid-peer-helper.manifest/v1',
     buildId: 'uid-peer-helper:bypass-gate',
-    binaryPath: 'build/uid-peer-helper',
     binarySha256: '2'.repeat(64),
-    sourcePath: 'native/uid-peer-helper.c',
-    sourceSha256: '3'.repeat(64),
+    sourceSha256: createHash('sha256').update(helperSource, 'utf8').digest('hex'),
     primitive: 'getpeereid(3)',
-    buildCommand: ['cc', '-o', 'build/uid-peer-helper', 'native/uid-peer-helper.c'],
     signature: null
   };
   manifest.codeManifestHash = computeCodeManifestHash(manifest);
