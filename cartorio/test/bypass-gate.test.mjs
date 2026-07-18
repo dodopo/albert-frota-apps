@@ -19,7 +19,7 @@ import { computeCodeManifestHash } from '../lib/uid-peer.js';
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const uid = process.getuid?.() ?? 501;
-const runId = 'agent:neo:subagent:bypass-00000000-0000-4000-8000-000000000010';
+const runId = 'agent:neo:subagent:000000000010';
 const helperSource = 'int main(void) { return 0; }\n';
 
 test('gate passo10: hook local recusa commit quando existe missao aberta', async () => {

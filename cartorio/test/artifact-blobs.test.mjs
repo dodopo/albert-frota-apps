@@ -11,7 +11,7 @@ import { collectArtifactBlobs, normalizeArtifactPath } from '../lib/artifact-blo
 import { createLedgerStore, validateMissaoId } from '../lib/ledger-store.js';
 
 const execFileAsync = promisify(execFile);
-const runId = 'agent:neo:subagent:00000000-0000-4000-8000-000000000000';
+const runId = 'agent:neo:subagent:000000000000';
 
 test('gate passo6: artefatos sao resolvidos pelo blob staged/commitado, nunca working tree', async () => {
   const t = await tempGitRepo('staged');

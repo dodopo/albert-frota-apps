@@ -32,21 +32,26 @@ test('protocol envelope and receipt skeleton keep required fields visible', () =
     command: SUPPORTED_COMMANDS[0],
     idempotencyKey: 'missao:test:abrir:1',
     actorUid: 501,
-    runId: 'agent:neo:subagent:00000000-0000-4000-8000-000000000000'
+    runId: 'agent:neo:subagent:000000000000'
   });
 
   assert.equal(envelope.protocol, protocolVersion);
 
   const receipt = buildReceipt({
-    missaoId: 'F1-test',
-    ledgerHeadHash: 'stub',
+    missaoId: 'f1-test',
+    eventId: '00000000-0000-4000-8000-000000000000',
+    ledgerHeadHash: 'a'.repeat(64),
     ledgerSeq: 1,
-    commit: 'stub',
+    parentCommit: 'b'.repeat(40),
+    treeScope: 'cartorio.git-tree.v1:app-files-excluding-mission-receipts',
+    treeHashExcludingReceipts: 'c'.repeat(64),
+    artefatos: [{ path: 'package.json', blobSha256: 'd'.repeat(64) }],
     runId: envelope.runId,
     ator: 'openclaw',
+    actorUid: 501,
     ts: '2026-07-16T00:00:00.000Z',
-    keyId: 'stub',
-    codeManifestHash: 'stub'
+    keyId: '1'.repeat(16),
+    codeManifestHash: 'e'.repeat(64)
   });
 
   assert.equal(receipt.version, RECEIPT_VERSION);

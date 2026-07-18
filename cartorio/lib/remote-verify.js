@@ -26,7 +26,7 @@ export const CARTORIO_APP_DIR = 'cartorio';
 export const TREE_SCOPE_V1 = 'cartorio.git-tree.v1:app-files-excluding-mission-receipts';
 const HEX_SHA256 = /^[0-9a-f]{64}$/;
 const HEX_COMMIT = /^[0-9a-f]{40,64}$/;
-const RUN_ID_PATTERN = /^(agent:[a-z0-9._-]+:subagent:[0-9a-fA-F-]{12,}|human:[a-z0-9._:-]+|manual:[a-z0-9._:-]+)$/;
+const RUN_ID_PATTERN = /^(agent:[a-z0-9._-]+:subagent:[0-9a-fA-F]{12,}|human:[a-z0-9._:-]+|manual:[a-z0-9._:-]+)$/;
 const BREAK_GLASS_REQUIRED = [
   'id',
   'motivo',

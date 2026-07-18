@@ -15,8 +15,8 @@ import { receiptPathForMission } from '../lib/receipt.js';
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const uid = process.getuid?.() ?? 501;
-const runId = 'agent:neo:subagent:audit-00000000-0000-4000-8000-000000000001';
-const missingRunId = 'agent:neo:subagent:audit-00000000-0000-4000-8000-000000000002';
+const runId = 'agent:neo:subagent:000000000011';
+const missingRunId = 'agent:neo:subagent:000000000012';
 const humanRunId = `human:${uid}`;
 const parentCommit = 'a'.repeat(40);
 const treeScope = 'cartorio.git-tree.v1:app-files-excluding-mission-receipts';
@@ -89,12 +89,15 @@ async function writeSessions(t, entries = { [runId]: 'session-ok' }) {
 async function buildVerifiedLedger(t, id = runId) {
   const store = storeFor(t);
   await store.append(request('abrir', 'm-audit', 'open', { assunto: 'audit' }, id));
-  await store.append(request('entregar', 'm-audit', 'deliver', {
+  const delivered = await store.append(request('entregar', 'm-audit', 'deliver', {
     parentCommit,
     treeScope,
     treeHashExcludingReceipts,
     artefatos: [artifact]
   }, id));
+  await mkdir(t.receiptDir, { recursive: true, mode: 0o755 });
+  await writeFile(receiptPathForMission(t.receiptDir, 'm-audit'), canonicalize(delivered.receipt), 'utf8');
+  await chmod(receiptPathForMission(t.receiptDir, 'm-audit'), 0o644);
   await store.append(request('coletar', 'm-audit', 'collect', { confirmacao: 'ok' }, id));
 }
 
@@ -278,7 +281,15 @@ test('gate passo8: receipts ausente, invalido e stale reprovam', async () => {
   try {
     await writeSessions(stale);
     await buildVerifiedLedger(stale);
-    await storeFor(stale).append(request('abrir', 'm-later', 'later-open', { assunto: 'later' }));
+    const store = storeFor(stale);
+    await store.append(request('abrir', 'm-later', 'later-open', { assunto: 'later' }));
+    const later = await store.append(request('entregar', 'm-later', 'later-deliver', {
+      parentCommit,
+      treeScope,
+      treeHashExcludingReceipts,
+      artefatos: [artifact]
+    }));
+    await writeFile(receiptPathForMission(stale.receiptDir, 'm-audit'), canonicalize(later.receipt), 'utf8');
     const result = await report(stale);
     assert.equal(result.ok, false);
     assert.ok(codes(result).includes('RECEIPT_STALE'));

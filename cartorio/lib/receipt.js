@@ -17,9 +17,31 @@ export const RECEIPT_VERSION = 'cartorio.receipt.v1';
 
 const HEX_SHA256 = /^[0-9a-f]{64}$/;
 const HEX_COMMIT = /^[0-9a-f]{40,64}$/;
+const HEX_KEY_ID = /^[0-9a-f]{16}$/;
+const RECEIPT_ALLOWED_KEYS = new Set([
+  'version',
+  'missaoId',
+  'eventId',
+  'ledgerHeadHash',
+  'ledgerSeq',
+  'parentCommit',
+  'treeScope',
+  'treeHashExcludingReceipts',
+  'artefatos',
+  'runId',
+  'ator',
+  'actorUid',
+  'ts',
+  'keyId',
+  'codeManifestHash',
+  'buildId',
+  'signature'
+]);
+const ARTIFACT_KEYS = ['blobSha256', 'path'];
 
 export function buildReceipt({
   missaoId,
+  eventId,
   ledgerHeadHash,
   ledgerSeq,
   parentCommit,
@@ -28,14 +50,16 @@ export function buildReceipt({
   artefatos = [],
   runId,
   ator,
+  actorUid,
   ts = new Date().toISOString(),
   keyId,
   codeManifestHash,
   buildId
 } = {}) {
-  return compact({
+  const receipt = compact({
     version: RECEIPT_VERSION,
     missaoId,
+    eventId,
     ledgerHeadHash,
     ledgerSeq,
     parentCommit,
@@ -44,12 +68,15 @@ export function buildReceipt({
     artefatos,
     runId,
     ator,
+    actorUid,
     ts,
     keyId,
     codeManifestHash,
     buildId,
     signature: null
   });
+  validateReceiptPayload(receipt, { requireKeyId: keyId != null });
+  return receipt;
 }
 
 export async function signReceipt(receipt, options = {}) {
@@ -160,21 +187,26 @@ export function unsignedReceiptMaterial(receipt) {
   return material;
 }
 
-function validateReceiptPayload(receipt, { requireSignature = false } = {}) {
+function validateReceiptPayload(receipt, { requireSignature = false, requireKeyId = true } = {}) {
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
     throw receiptError('RECEIPT_INVALID', 'receipt precisa ser objeto');
+  }
+  for (const key of Object.keys(receipt)) {
+    if (!RECEIPT_ALLOWED_KEYS.has(key)) {
+      throw receiptError('RECEIPT_INVALID', 'receipt contem campo fora da whitelist EMENDA-1', { field: key });
+    }
   }
   if (receipt.version !== RECEIPT_VERSION) {
     throw receiptError('RECEIPT_INVALID', 'version de receipt invalida', { version: receipt.version });
   }
   assertNonEmptyString(receipt.missaoId, 'missaoId');
+  if (receipt.eventId != null) {
+    assertNonEmptyString(receipt.eventId, 'eventId');
+  }
   if (!Number.isInteger(receipt.ledgerSeq) || receipt.ledgerSeq < 1) {
     throw receiptError('RECEIPT_INVALID', 'ledgerSeq invalido', { ledgerSeq: receipt.ledgerSeq });
   }
   assertHex(receipt.ledgerHeadHash, 'ledgerHeadHash', HEX_SHA256);
-  if ('commit' in receipt) {
-    throw receiptError('RECEIPT_INVALID', 'receipt v1 emendado nao pode conter commit autorreferente');
-  }
   assertHex(receipt.parentCommit, 'parentCommit', HEX_COMMIT);
   assertNonEmptyString(receipt.treeScope, 'treeScope');
   assertHex(receipt.treeHashExcludingReceipts, 'treeHashExcludingReceipts', HEX_SHA256);
@@ -185,12 +217,21 @@ function validateReceiptPayload(receipt, { requireSignature = false } = {}) {
     if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
       throw receiptError('RECEIPT_INVALID', 'artefato precisa ser objeto');
     }
+    const keys = Object.keys(artifact).sort();
+    if (canonicalize(keys) !== canonicalize(ARTIFACT_KEYS)) {
+      throw receiptError('RECEIPT_INVALID', 'artefato precisa conter exatamente path e blobSha256', { keys });
+    }
     assertNonEmptyString(artifact.path, 'artefato.path');
     assertHex(artifact.blobSha256, 'artefato.blobSha256', HEX_SHA256);
   }
   assertNonEmptyString(receipt.runId, 'runId');
   assertNonEmptyString(receipt.ator, 'ator');
-  assertNonEmptyString(receipt.keyId, 'keyId');
+  if (receipt.actorUid != null && (!Number.isInteger(receipt.actorUid) || receipt.actorUid < 0)) {
+    throw receiptError('RECEIPT_INVALID', 'actorUid invalido', { actorUid: receipt.actorUid });
+  }
+  if (requireKeyId) {
+    assertHex(receipt.keyId, 'keyId', HEX_KEY_ID);
+  }
   assertHex(receipt.codeManifestHash, 'codeManifestHash', HEX_SHA256);
   if (receipt.buildId != null) {
     assertNonEmptyString(receipt.buildId, 'buildId');

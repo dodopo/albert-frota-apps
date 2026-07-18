@@ -21,7 +21,7 @@ const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const verifyBin = join(root, 'bin', 'verify-receipt.js');
 const ts = '2026-07-16T17:00:00.000Z';
-const runId = 'agent:neo:subagent:00000000-0000-4000-8000-000000000009';
+const runId = 'agent:neo:subagent:000000000009';
 const helperSource = 'int main(void) { return 0; }\n';
 let receiptCounter = 0;
 

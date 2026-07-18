@@ -25,7 +25,7 @@ const envelope = makeEnvelope({
   command: 'entregar',
   idempotencyKey: 'self-test:entregar:1',
   actorUid: process.getuid?.() ?? null,
-  runId: 'agent:neo:subagent:00000000-0000-4000-8000-000000000000',
+  runId: 'agent:neo:subagent:000000000000',
   payload: { missaoId: 'self-test' }
 });
 assert.equal(envelope.command, 'entregar');

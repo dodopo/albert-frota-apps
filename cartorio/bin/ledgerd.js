@@ -124,6 +124,9 @@ async function executeCommand({ store, envelope, peer, manifest }) {
       codeManifestHash: manifest.codeManifestHash
     };
   }
+  if (envelope.command === 'receipt') {
+    return store.receiptForMission(payload.missaoId ?? envelope.missaoId);
+  }
   return store.append({
     ...envelope,
     missaoId: payload.missaoId ?? envelope.missaoId,

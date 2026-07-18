@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { fork, execFile } from 'node:child_process';
 import net from 'node:net';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -17,7 +17,12 @@ const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const uid = process.getuid();
 const gid = process.getgid();
-const runId = 'agent:neo:subagent:00000000-0000-4000-8000-000000000000';
+const runId = 'agent:neo:subagent:000000000000';
+const parentCommit = 'a'.repeat(40);
+const treeScope = 'cartorio.git-tree.v1:app-files-excluding-mission-receipts';
+const treeHashExcludingReceipts = 'b'.repeat(64);
+const codeManifestHash = 'c'.repeat(64);
+const artifact = { path: 'package.json', blobSha256: 'd'.repeat(64) };
 
 function request(command, missaoId, idempotencyKey, payload = {}) {
   return {
@@ -32,19 +37,52 @@ function request(command, missaoId, idempotencyKey, payload = {}) {
 
 async function tempCase(name) {
   const dir = await mkdtemp(join(tmpdir(), `cartorio-ledgerd-${name}-`));
+  const keyDir = join(dir, 'keys-private');
+  await mkdir(keyDir, { recursive: true, mode: 0o700 });
+  await chmod(keyDir, 0o700);
   return {
     dir,
     ledgerPath: join(dir, 'missoes.jsonl'),
+    privateKeyPath: join(keyDir, 'ledgerd.ed25519.pem'),
+    keyringPath: join(dir, '.cartorio', 'keys', 'keyring.json'),
     cleanup: () => rm(dir, { recursive: true, force: true })
+  };
+}
+
+function storeFor(t) {
+  return createLedgerStore({
+    ledgerPath: t.ledgerPath,
+    codeManifestHash,
+    privateKeyPath: t.privateKeyPath,
+    keyringPath: t.keyringPath
+  });
+}
+
+function deliveryPayload(overrides = {}) {
+  return {
+    parentCommit,
+    treeScope,
+    treeHashExcludingReceipts,
+    artefatos: [artifact],
+    ...overrides
+  };
+}
+
+function ledgerdEnv(t) {
+  return {
+    ...process.env,
+    CARTORIO_LEDGERD_KEY_PATH: t.privateKeyPath,
+    CARTORIO_KEYRING_PATH: t.keyringPath,
+    CARTORIO_CODE_MANIFEST_HASH: codeManifestHash
   };
 }
 
 test('gate: fluxo feliz abrir -> entregar -> coletar deixa missao verificada', async () => {
   const t = await tempCase('happy');
   try {
-    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    const store = storeFor(t);
     const abrir = await store.append(request('abrir', 'm-happy', 'idem-open', { assunto: 'abrir' }));
-    const entregar = await store.append(request('entregar', 'm-happy', 'idem-deliver', { commit: 'abc123' }));
+    const entregar = await store.append(request('entregar', 'm-happy', 'idem-deliver', deliveryPayload()));
     const coletar = await store.append(request('coletar', 'm-happy', 'idem-collect', { confirmacao: 'ok' }));
 
     assert.equal(abrir.event.stateAfter, 'aberta');
@@ -62,7 +100,7 @@ test('gate: fluxo feliz abrir -> entregar -> coletar deixa missao verificada', a
 test('f2-pr1: listar e read-only, paginado e redigido', async () => {
   const t = await tempCase('listar');
   try {
-    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    const store = storeFor(t);
     await store.append(request('abrir', 'm-listar-a', 'idem-open-a', { assunto: 'abrir-a' }));
     await store.append(request('abrir', 'm-listar-b', 'idem-open-b', { assunto: 'abrir-b' }));
 
@@ -87,7 +125,7 @@ test('f2-pr1: listar e read-only, paginado e redigido', async () => {
 test('gate: coleta antes da entrega e rejeitada', async () => {
   const t = await tempCase('state');
   try {
-    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    const store = storeFor(t);
     await store.append(request('abrir', 'm-state', 'idem-open', { assunto: 'abrir' }));
     await assert.rejects(
       () => store.append(request('coletar', 'm-state', 'idem-collect', { confirmacao: 'cedo' })),
@@ -101,7 +139,7 @@ test('gate: coleta antes da entrega e rejeitada', async () => {
 test('gate passo10: entregar missao nunca aberta falha fechado', async () => {
   const t = await tempCase('deliver-without-open');
   try {
-    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    const store = storeFor(t);
     await assert.rejects(
       () => store.append(request('entregar', 'm-never-opened', 'idem-deliver', { commit: 'abc123' })),
       /transicao de missao rejeitada/
@@ -118,13 +156,13 @@ test('gate: dois appends simultaneos mantem seq monotônico e cadeia valida', as
     const a = JSON.stringify(request('abrir', 'm-concurrent-a', 'idem-a', { assunto: 'a' }));
     const b = JSON.stringify(request('abrir', 'm-concurrent-b', 'idem-b', { assunto: 'b' }));
     const [ra, rb] = await Promise.all([
-      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', a, '--ledger', t.ledgerPath], { cwd: root }),
-      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', b, '--ledger', t.ledgerPath], { cwd: root })
+      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', a, '--ledger', t.ledgerPath], { cwd: root, env: ledgerdEnv(t) }),
+      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', b, '--ledger', t.ledgerPath], { cwd: root, env: ledgerdEnv(t) })
     ]);
     assert.equal(JSON.parse(ra.stdout).ok, true);
     assert.equal(JSON.parse(rb.stdout).ok, true);
 
-    const head = await createLedgerStore({ ledgerPath: t.ledgerPath }).readHead();
+    const head = await storeFor(t).readHead();
     assert.equal(head.ledgerSeq, 2);
     assert.notEqual(head.ledgerHeadHash, ZERO_HASH);
   } finally {
@@ -135,14 +173,14 @@ test('gate: dois appends simultaneos mantem seq monotônico e cadeia valida', as
 test('gate passo10: entregas concorrentes da mesma missao tem uma vencedora e uma conflito', async () => {
   const t = await tempCase('same-mission-concurrent-delivery');
   try {
-    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    const store = storeFor(t);
     await store.append(request('abrir', 'm-same-delivery', 'idem-open', { assunto: 'abrir' }));
 
-    const a = JSON.stringify(request('entregar', 'm-same-delivery', 'idem-deliver-a', { commit: 'a'.repeat(40) }));
-    const b = JSON.stringify(request('entregar', 'm-same-delivery', 'idem-deliver-b', { commit: 'b'.repeat(40) }));
+    const a = JSON.stringify(request('entregar', 'm-same-delivery', 'idem-deliver-a', deliveryPayload({ parentCommit: 'a'.repeat(40) })));
+    const b = JSON.stringify(request('entregar', 'm-same-delivery', 'idem-deliver-b', deliveryPayload({ parentCommit: 'b'.repeat(40) })));
     const results = await Promise.allSettled([
-      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', a, '--ledger', t.ledgerPath], { cwd: root }),
-      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', b, '--ledger', t.ledgerPath], { cwd: root })
+      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', a, '--ledger', t.ledgerPath], { cwd: root, env: ledgerdEnv(t) }),
+      execFileAsync(process.execPath, ['bin/ledgerd.js', '--append-json', b, '--ledger', t.ledgerPath], { cwd: root, env: ledgerdEnv(t) })
     ]);
 
     assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
@@ -151,7 +189,7 @@ test('gate passo10: entregas concorrentes da mesma missao tem uma vencedora e um
     assert.equal(rejected.code, 65);
     assert.match(rejected.stderr, /INVALID_STATE/);
 
-    const head = await createLedgerStore({ ledgerPath: t.ledgerPath }).readHead();
+    const head = await storeFor(t).readHead();
     assert.equal(head.ledgerSeq, 2);
   } finally {
     await t.cleanup();
@@ -161,9 +199,9 @@ test('gate passo10: entregas concorrentes da mesma missao tem uma vencedora e um
 test('gate: replay idempotente devolve mesmo evento e payload diferente conflita em estado final', async () => {
   const t = await tempCase('idempotency');
   try {
-    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    const store = storeFor(t);
     await store.append(request('abrir', 'm-idem', 'idem-open', { assunto: 'abrir' }));
-    await store.append(request('entregar', 'm-idem', 'idem-deliver', { commit: 'abc123' }));
+    await store.append(request('entregar', 'm-idem', 'idem-deliver', deliveryPayload()));
     const first = await store.append(request('coletar', 'm-idem', 'idem-collect', { confirmacao: 'ok' }));
     const replay = await store.append(request('coletar', 'm-idem', 'idem-collect', { confirmacao: 'ok' }));
     assert.equal(replay.idempotent, true);
@@ -180,11 +218,11 @@ test('gate: replay idempotente devolve mesmo evento e payload diferente conflita
 test('gate: cabeca antiga e rejeitada por anti-rollback esperado pelo cliente', async () => {
   const t = await tempCase('old-head');
   try {
-    const store = createLedgerStore({ ledgerPath: t.ledgerPath });
+    const store = storeFor(t);
     await store.append(request('abrir', 'm-old-head', 'idem-open', { assunto: 'abrir' }));
     await assert.rejects(
       () => store.append({
-        ...request('entregar', 'm-old-head', 'idem-deliver', { commit: 'abc123' }),
+        ...request('entregar', 'm-old-head', 'idem-deliver', deliveryPayload()),
         expectedLedgerSeq: 0,
         expectedLedgerHeadHash: ZERO_HASH
       }),
@@ -218,7 +256,7 @@ test('gate: gap de seq, JSONL ruim e ledger truncado sao detectados', async () =
 
   const trunc = await tempCase('trunc');
   try {
-    const store = createLedgerStore({ ledgerPath: trunc.ledgerPath });
+    const store = storeFor(trunc);
     await store.append(request('abrir', 'm-trunc', 'idem-open', { assunto: 'abrir' }));
     const text = await readFile(trunc.ledgerPath, 'utf8');
     await writeFile(trunc.ledgerPath, text.trimEnd(), 'utf8');

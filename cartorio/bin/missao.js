@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 import net from 'node:net';
+import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { canonicalize, parseCanonicalJson } from '../lib/canonical-json.js';
+import { writeFileAtomic } from '../lib/atomic-fs.js';
 import { collectArtifactBlobs, normalizeArtifactPath } from '../lib/artifact-blobs.js';
 import { auditLocalRepository, formatAuditReport } from '../lib/audit.js';
 import { computeTreeHashExcludingReceipts, resolveCartorioAppDir } from '../lib/remote-verify.js';
@@ -13,16 +16,20 @@ import {
   DaemonUnavailableError,
   errorResponse,
   exitCodeForProtocolCode,
+  GitContextMissingError,
   makeEnvelope,
   protocolVersion,
   SUPPORTED_COMMANDS
 } from '../lib/protocol.js';
+import { receiptPathForMission } from '../lib/receipt.js';
 import { verifyUidPeerHelperManifest } from '../lib/uid-peer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
+const execFileAsync = promisify(execFile);
 const DEFAULT_SOCKET = '/Users/cartorio/run/ledgerd.sock';
 const RESPONSE_TMP_PARENT = '/tmp';
+const RUN_ID_PATTERN = /^(agent:[a-z0-9._-]+:subagent:[0-9a-fA-F]{12,}|human:[a-z0-9._:-]+|manual:[a-z0-9._:-]+)$/;
 
 const HELP = `missao ${packageJson.version}
 
@@ -35,6 +42,7 @@ Comandos:
   abrir      Registra a abertura de uma missao no ledgerd
   entregar   Registra entrega com runId e artefatos declarados
   coletar    Registra coleta/confirmacao de artefatos
+  receipt    Reobtem o receipt assinado de uma missao ja entregue, sem escrever no ledger
   status     Consulta estado via ledgerd sem escrever no ledger
   listar     Lista missoes via ledgerd sem escrever no ledger
   audit      Auditoria local do ledger, receipts e proveniencia
@@ -65,6 +73,8 @@ Opcoes:
   --expected-ledger-head-hash <hash>
   --help, -h                 Mostra esta ajuda
   --version, -v              Mostra a versao do pacote
+
+Nota: se uma entrega ja existe, use "missao receipt" para reobter o receipt assinado.
 
 Protocolo CLI->ledgerd: ${protocolVersion}`;
 
@@ -117,11 +127,18 @@ async function main(argv = process.argv.slice(2)) {
   const socketPath = options.socket ?? process.env.CARTORIO_LEDGERD_SOCKET ?? DEFAULT_SOCKET;
   const envelope = await buildEnvelope(command, options);
   const response = await requestLedgerd(socketPath, envelope);
+  const receiptPath = await materializeReceipt(command, envelope.payload, response);
+  if (receiptPath) {
+    response.result.receiptPath = receiptPath;
+  }
   printResponse(response);
   return response.ok ? 0 : exitCodeForProtocolCode(response.code);
 }
 
 async function buildEnvelope(command, options) {
+  if (command === 'entregar') {
+    validateRunId(options.runId);
+  }
   const payload = await buildPayload(command, options);
   const base = makeEnvelope({
     command,
@@ -131,13 +148,13 @@ async function buildEnvelope(command, options) {
     actorGid: process.getgid?.(),
     runId: options.runId
   });
-  if (!base.runId && command !== 'status' && command !== 'listar' && command !== 'audit') {
+  if (!base.runId && command !== 'status' && command !== 'listar' && command !== 'audit' && command !== 'receipt') {
     throw Object.assign(new Error('runId obrigatorio para comandos de escrita'), { code: 'INVALID_STATE' });
   }
-  if (!base.idempotencyKey && command !== 'status' && command !== 'listar' && command !== 'audit') {
+  if (!base.idempotencyKey && command !== 'status' && command !== 'listar' && command !== 'audit' && command !== 'receipt') {
     base.idempotencyKey = defaultIdempotencyKey(base);
   }
-  if ((command === 'status' || command === 'listar' || command === 'audit') && !base.idempotencyKey) {
+  if ((command === 'status' || command === 'listar' || command === 'audit' || command === 'receipt') && !base.idempotencyKey) {
     base.idempotencyKey = `${command}:${payload.missaoId ?? 'all'}`;
   }
   return base;
@@ -177,6 +194,15 @@ async function buildPayload(command, options) {
     payload.treeHashExcludingReceipts = tree.treeHashExcludingReceipts;
     payload.cartorioRepoRoot = resolved.repoRoot;
     payload.artefatos = resolved.artifacts;
+  } else if (command === 'receipt') {
+    const repoRoot = await resolveRepoRoot(process.cwd());
+    const commit = options.commit ?? 'HEAD';
+    payload.cartorioRepoRoot = repoRoot;
+    payload.appDir = await resolveCartorioAppDir({
+      repo: repoRoot,
+      commit,
+      appDir: options.appDir
+    });
   } else if (options.commit) {
     payload.commit = String(options.commit);
   }
@@ -193,6 +219,23 @@ async function buildPayload(command, options) {
     payload.limit = Number(options.limit);
   }
   return payload;
+}
+
+async function materializeReceipt(command, payload, response) {
+  if (!response.ok || !['entregar', 'receipt'].includes(command) || !response.result?.receipt) {
+    return null;
+  }
+  const repoRoot = payload.cartorioRepoRoot;
+  if (!repoRoot) {
+    return null;
+  }
+  const appDir = payload.appDir || '';
+  const receiptDir = join(repoRoot, appDir, '.cartorio', 'missoes');
+  await mkdir(receiptDir, { recursive: true, mode: 0o755 });
+  const path = receiptPathForMission(receiptDir, response.result.receipt.missaoId);
+  await writeFileAtomic(path, canonicalize(response.result.receipt), { mode: 0o644 });
+  await chmod(path, 0o644);
+  return path;
 }
 
 async function requestLedgerd(socketPath, envelope) {
@@ -426,6 +469,28 @@ function parseArtefato(value) {
     throw Object.assign(new Error('--artefato precisa ser path[:sha256] com sha256 hex'), { code: 'INVALID_STATE' });
   }
   return blobSha256 == null ? { path: normalizedPath } : { path: normalizedPath, blobSha256 };
+}
+
+function validateRunId(runId) {
+  if (typeof runId !== 'string' || !RUN_ID_PATTERN.test(runId)) {
+    throw Object.assign(new Error('runId invalido para entregar: use agent:<nome>:subagent:<hex12+>, human:<id> ou manual:<id>'), {
+      code: 'INVALID_STATE',
+      details: { runId }
+    });
+  }
+}
+
+async function resolveRepoRoot(cwd) {
+  try {
+    const result = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
+    return result.stdout.trim();
+  } catch (error) {
+    throw new GitContextMissingError('git rev-parse --show-toplevel falhou', {
+      cwd,
+      stderr: error.stderr?.trim?.() ?? error.message,
+      stdout: error.stdout?.trim?.() ?? ''
+    });
+  }
 }
 
 function defaultIdempotencyKey(envelope) {

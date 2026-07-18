@@ -7,7 +7,7 @@ import { appendFileAtomic, recoverAtomicOrphans, writeFileAtomic } from './atomi
 import { defaultKeyringPath, defaultPrivateKeyPath } from './keyring.js';
 import { withLock } from './lock.js';
 import { ConflictError, DaemonUnavailableError, InvalidStateError, UidPeerActorMismatchError } from './protocol.js';
-import { buildReceipt, receiptPathForMission, writeSignedReceipt } from './receipt.js';
+import { buildReceipt, signReceipt } from './receipt.js';
 import { eventTypeForCommand, nextState, STATES } from './state-machine.js';
 
 export const ZERO_HASH = '0'.repeat(64);
@@ -136,6 +136,10 @@ export class LedgerStore {
 
       const currentState = loaded.missions.get(normalized.missaoId) ?? STATES.INEXISTENTE;
       const resultingState = nextState(currentState, normalized.eventType);
+      assertDeliveryReceiptMaterial(normalized, resultingState, {
+        codeManifestHash: normalized.codeManifestHash ?? this.codeManifestHash,
+        buildId: normalized.buildId ?? this.buildId
+      });
       const seq = loaded.head.ledgerSeq + 1;
       const base = {
         version: LEDGER_RECORD_VERSION,
@@ -261,49 +265,61 @@ export class LedgerStore {
   }
 
   async receiptForRecord(record) {
-    if (record.stateAfter !== STATES.VERIFICADA) {
-      return makeUnsignedReceipt(record);
+    if (record.eventType === 'missao.entregue') {
+      return this.#signedReceiptFromRecord(record);
     }
-    const receiptDir = receiptDirForRecord(this.receiptDir, record);
-    if (!receiptDir) {
-      return makeUnsignedReceipt(record);
+    return makeUnsignedReceipt(record);
+  }
+
+  async receiptForMission(missaoId) {
+    await this.recoverOrphans();
+    const loaded = await this.loadAndValidate();
+    const id = validateMissaoId(missaoId);
+    const delivery = findLastMissionEventByType(loaded.records, id, 'missao.entregue');
+    if (!delivery) {
+      throw new InvalidStateError('receipt indisponivel: missao ainda nao entregue', { missaoId: id });
     }
-    try {
-      const text = await readFile(receiptPathForMission(receiptDir, record.missaoId), 'utf8');
-      return JSON.parse(text);
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        throw error;
-      }
-      return makeUnsignedReceipt(record);
-    }
+    return {
+      ok: true,
+      missaoId: id,
+      head: loaded.head,
+      receipt: await this.#signedReceiptFromRecord(delivery)
+    };
   }
 
   async emitReceiptIfVerified(record, previousRecords) {
+    if (record.eventType === 'missao.entregue') {
+      return this.#signedReceiptFromRecord(record);
+    }
     if (record.stateAfter !== STATES.VERIFICADA) {
       return makeUnsignedReceipt(record);
     }
     const delivery = findLastMissionEventByType(previousRecords, record.missaoId, 'missao.entregue');
-    const deliveryPayload = delivery?.payload ?? {};
-    const receiptDir = receiptDirForRecord(this.receiptDir, delivery ?? record);
-    if (!receiptDir) {
+    if (!delivery) {
       return makeUnsignedReceipt(record);
     }
+    return this.#signedReceiptFromRecord(delivery);
+  }
+
+  async #signedReceiptFromRecord(record) {
+    const artifacts = normalizeReceiptArtifacts(record.payload?.artefatos);
     const receipt = buildReceipt({
       missaoId: record.missaoId,
+      eventId: record.eventId,
       ledgerHeadHash: record.hash,
       ledgerSeq: record.seq,
-      parentCommit: deliveryPayload.parentCommit ?? record.payload?.parentCommit,
-      treeScope: deliveryPayload.treeScope ?? record.payload?.treeScope,
-      treeHashExcludingReceipts: deliveryPayload.treeHashExcludingReceipts ?? record.payload?.treeHashExcludingReceipts,
-      artefatos: deliveryPayload.artefatos ?? record.payload?.artefatos ?? [],
+      parentCommit: record.payload?.parentCommit,
+      treeScope: record.payload?.treeScope,
+      treeHashExcludingReceipts: record.payload?.treeHashExcludingReceipts,
+      artefatos: artifacts,
       runId: record.runId,
       ator: record.actor,
+      actorUid: record.actorUid,
       ts: record.ts,
       codeManifestHash: record.codeManifestHash,
       buildId: record.buildId
     });
-    return writeSignedReceipt(receipt, receiptPathForMission(receiptDir, record.missaoId), {
+    return signReceipt(receipt, {
       privateKeyPath: this.privateKeyPath,
       keyringPath: this.keyringPath
     });
@@ -488,14 +504,6 @@ function findLastMissionEventByType(records, missaoId, eventType) {
   return null;
 }
 
-function receiptDirForRecord(configuredReceiptDir, record) {
-  if (configuredReceiptDir) {
-    return configuredReceiptDir;
-  }
-  const repoRoot = record?.payload?.cartorioRepoRoot;
-  return repoRoot ? join(repoRoot, '.cartorio', 'missoes') : null;
-}
-
 function makeUnsignedReceipt(record) {
   return {
     version: 'cartorio.ledger-receipt.unsigned/v1',
@@ -513,6 +521,72 @@ function makeUnsignedReceipt(record) {
     buildId: record.buildId,
     signature: null
   };
+}
+
+function assertDeliveryReceiptMaterial(normalized, resultingState, { codeManifestHash }) {
+  if (normalized.eventType !== 'missao.entregue' || resultingState !== STATES.DELIVERED_PENDING_GIT) {
+    return;
+  }
+  const missing = [];
+  const payload = normalized.payload ?? {};
+  for (const field of ['parentCommit', 'treeScope', 'treeHashExcludingReceipts']) {
+    if (payload[field] == null) {
+      missing.push(field);
+    }
+  }
+  if (!Array.isArray(payload.artefatos)) {
+    missing.push('artefatos');
+  }
+  if (codeManifestHash == null) {
+    missing.push('codeManifestHash');
+  }
+  if (missing.length > 0) {
+    throw deliveryReceiptMaterialMissing(missing);
+  }
+  try {
+    buildReceipt({
+      missaoId: normalized.missaoId,
+      eventId: '00000000-0000-4000-8000-000000000000',
+      ledgerHeadHash: '0'.repeat(64),
+      ledgerSeq: 1,
+      parentCommit: payload.parentCommit,
+      treeScope: payload.treeScope,
+      treeHashExcludingReceipts: payload.treeHashExcludingReceipts,
+      artefatos: normalizeReceiptArtifacts(payload.artefatos),
+      runId: normalized.runId,
+      ator: `uid:${normalized.actorUid}`,
+      actorUid: normalized.actorUid,
+      ts: normalized.ts,
+      codeManifestHash
+    });
+  } catch (error) {
+    throw deliveryReceiptMaterialMissing([], error);
+  }
+}
+
+function normalizeReceiptArtifacts(artifacts) {
+  if (!Array.isArray(artifacts)) {
+    throw deliveryReceiptMaterialMissing(['artefatos']);
+  }
+  return artifacts.map((artifact) => {
+    if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+      throw deliveryReceiptMaterialMissing(['artefatos']);
+    }
+    return {
+      path: artifact.path,
+      blobSha256: artifact.blobSha256
+    };
+  });
+}
+
+function deliveryReceiptMaterialMissing(missing, cause = null) {
+  const error = new InvalidStateError('material EMENDA-1 incompleto para assinar receipt de entrega', {
+    missing,
+    causeCode: cause?.code ?? null,
+    causeMessage: cause?.message ?? null
+  });
+  error.code = 'DELIVERY_RECEIPT_MATERIAL_MISSING';
+  return error;
 }
 
 function normalizeCursor(value) {
