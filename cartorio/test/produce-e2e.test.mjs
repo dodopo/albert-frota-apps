@@ -12,8 +12,9 @@ import { ensureLedgerdSigningKey, loadKeyring } from '../lib/keyring.js';
 
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const runId = 'agent:neo:subagent:f2feedface01';
-const replayRunId = 'agent:neo:subagent:f2feedface02';
+const runIdContract = /^(agent:[a-z0-9._-]+:subagent:[0-9a-fA-F-]{12,}|human:[a-z0-9._:-]+|manual:[a-z0-9._:-]+)$/;
+const runId = 'agent:neo:subagent:3855a6c2-a930-40a2-b5d2-0fd0298a877c';
+const replayRunId = 'agent:neo:subagent:8a7d2b56-1111-4d8f-9e10-5e9a4d1f0abc';
 const missaoId = 'f2-produce-e2e';
 const idempotencyKey = 'f2-produce-e2e-deliver';
 const receiptWhitelist = [
@@ -37,6 +38,9 @@ const receiptWhitelist = [
 ];
 
 test('f2 write lifecycle: entregar via socket produz receipt verificavel, replay e recovery read-only', async () => {
+  assert.match(runId, runIdContract);
+  assert.match(replayRunId, runIdContract);
+
   const t = await tempCase();
   try {
     await setupRepo(t);

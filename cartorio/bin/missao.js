@@ -29,7 +29,7 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'
 const execFileAsync = promisify(execFile);
 const DEFAULT_SOCKET = '/Users/cartorio/run/ledgerd.sock';
 const RESPONSE_TMP_PARENT = '/tmp';
-const RUN_ID_PATTERN = /^(agent:[a-z0-9._-]+:subagent:[0-9a-fA-F]{12,}|human:[a-z0-9._:-]+|manual:[a-z0-9._:-]+)$/;
+const RUN_ID_PATTERN = /^(agent:[a-z0-9._-]+:subagent:[0-9a-fA-F-]{12,}|human:[a-z0-9._:-]+|manual:[a-z0-9._:-]+)$/;
 
 const HELP = `missao ${packageJson.version}
 
